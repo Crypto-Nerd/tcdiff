@@ -1,0 +1,176 @@
+--- ./Makefile	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Makefile	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ #
+-# Copyright (c) 2008-2010 TrueCrypt Developers Association. All rights reserved.
++# Derived from source code of TrueCrypt 7.1a, which is
++# Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++# by the TrueCrypt License 3.0.
+ #
+-# Governed by the TrueCrypt License 3.0 the full text of which is contained in
+-# the file License.txt included in TrueCrypt binary and source code distribution
+-# packages.
++# Modifications and additions to the original source code (contained in this file) 
++# and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++# and are governed by the Apache License 2.0 the full text of which is
++# contained in the file License.txt included in VeraCrypt binary and source
++# code distribution packages.
+ #
+ 
+ #------ Command line arguments ------
+@@ -25,7 +29,7 @@
+ 
+ #------ Build configuration ------
+ 
+-export APPNAME := truecrypt
++export APPNAME := veracrypt
+ export BASE_DIR := $(CURDIR)
+ export BUILD_INC := $(BASE_DIR)/Build/Include
+ 
+@@ -67,6 +71,8 @@
+ 
+ ifdef PKCS11_INC
+ 	C_CXX_FLAGS += -I$(PKCS11_INC)
++else
++	C_CXX_FLAGS += -I$(CURDIR)/PKCS11
+ endif
+ 
+ ifeq "$(origin RESOURCEDIR)" "command line"
+@@ -78,6 +84,7 @@
+ endif
+ 
+ ifeq "$(origin WXSTATIC)" "command line"
++	export VC_WX_STATIC := 1
+ 	WX_CONFIG = $(WX_BUILD_DIR)/wx-config
+ 	WX_CONFIG_ARGS += --static
+ endif
+@@ -116,6 +123,7 @@
+ #------ Platform configuration ------
+ 
+ export PLATFORM := "Unknown"
++export PLATFORM_ARCH := "Unknown"
+ export PLATFORM_UNSUPPORTED := 0
+ 
+ export CPU_ARCH ?= unknown
+@@ -127,10 +135,10 @@
+ 
+ ifneq (,$(filter i386 i486 i586 i686 x86,$(ARCH)))
+ 	CPU_ARCH = x86
+-	ASM_OBJ_FORMAT = elf32
++    ASFLAGS += -f elf32
+ else ifneq (,$(filter x86_64 x86-64 amd64 x64,$(ARCH)))
+ 	CPU_ARCH = x64
+-	ASM_OBJ_FORMAT = elf64
++    ASFLAGS += -f elf64
+ endif
+ 
+ ifeq "$(origin NOASM)" "command line"
+@@ -138,8 +146,10 @@
+ endif
+ 
+ ifeq "$(CPU_ARCH)" "x86"
++	PLATFORM_ARCH := i386
+ 	C_CXX_FLAGS += -D TC_ARCH_X86
+ else ifeq "$(CPU_ARCH)" "x64"
++	PLATFORM_ARCH := amd64
+ 	C_CXX_FLAGS += -D TC_ARCH_X64
+ endif
+ 
+@@ -162,6 +172,10 @@
+ 		WXCONFIG_CFLAGS += -fdata-sections -ffunction-sections
+ 		WXCONFIG_CXXFLAGS += -fdata-sections -ffunction-sections
+ 	endif
++	
++	ifneq "$(origin WXSTATIC)" "command line"
++		LFLAGS += -ldl
++	endif
+ 
+ endif
+ 
+@@ -171,21 +184,28 @@
+ ifeq "$(shell uname -s)" "Darwin"
+ 
+ 	PLATFORM := MacOSX
+-	APPNAME := TrueCrypt
++	APPNAME := VeraCrypt
++	
++	export VC_OSX_TARGET ?= 10.7
++
++	#check to see if XCode 3 path exists.Otherwise, use XCode 4 path
++	VC_OSX_SDK  := /Developer/SDKs/MacOSX$(VC_OSX_TARGET).sdk
++	ifeq ($(wildcard $(VC_OSX_SDK)/SDKSettings.plist),)
++		VC_OSX_SDK := /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX$(VC_OSX_TARGET).sdk
++	endif
++
++	CC := gcc
++	CXX := g++
+ 
+-	TC_OSX_SDK ?= /Developer/SDKs/MacOSX10.4u.sdk
+-	CC := gcc-4.0
+-	CXX := g++-4.0
+-
+-	C_CXX_FLAGS += -DTC_UNIX -DTC_BSD -DTC_MACOSX -mmacosx-version-min=10.4 -isysroot $(TC_OSX_SDK)
+-	LFLAGS += -mmacosx-version-min=10.4 -Wl,-syslibroot $(TC_OSX_SDK)
+-	WX_CONFIGURE_FLAGS += --with-macosx-version-min=10.4 --with-macosx-sdk=$(TC_OSX_SDK)
++	C_CXX_FLAGS += -DTC_UNIX -DTC_BSD -DTC_MACOSX -mmacosx-version-min=$(VC_OSX_TARGET) -isysroot $(VC_OSX_SDK)
++	LFLAGS += -mmacosx-version-min=$(VC_OSX_TARGET) -Wl,-syslibroot $(VC_OSX_SDK)
++	WX_CONFIGURE_FLAGS += --with-macosx-version-min=$(VC_OSX_TARGET) --with-macosx-sdk=$(VC_OSX_SDK)
+ 
+ 	ifeq "$(CPU_ARCH)" "x64"
+ 		CPU_ARCH = x86
+ 	endif
+ 
+-	ASM_OBJ_FORMAT = macho
++	AS := $(BASE_DIR)/Build/Tools/MacOSX/nasm
+ 	ASFLAGS += --prefix _
+ 
+ 	ifeq "$(TC_BUILD_CONFIG)" "Release"
+@@ -195,10 +215,10 @@
+ 		S := $(C_CXX_FLAGS)
+ 		C_CXX_FLAGS = $(subst -MMD,,$(S))
+ 
+-		C_CXX_FLAGS += -gfull -arch i386 -arch ppc
+-		LFLAGS += -Wl,-dead_strip -arch i386 -arch ppc
++		C_CXX_FLAGS += -gfull -arch i386 -arch x86_64
++		LFLAGS += -Wl,-dead_strip -arch i386 -arch x86_64
+ 
+-		WX_CONFIGURE_FLAGS += --enable-universal_binary
++		WX_CONFIGURE_FLAGS += --enable-universal_binary=i386,x86_64
+ 		WXCONFIG_CFLAGS += -gfull
+ 		WXCONFIG_CXXFLAGS += -gfull
+ 
+@@ -238,12 +258,11 @@
+ 
+ CFLAGS := $(C_CXX_FLAGS) $(CFLAGS) $(TC_EXTRA_CFLAGS)
+ CXXFLAGS := $(C_CXX_FLAGS) $(CXXFLAGS) $(TC_EXTRA_CXXFLAGS)
+-ASFLAGS += -f $(ASM_OBJ_FORMAT)
+ LFLAGS := $(LFLAGS) $(TC_EXTRA_LFLAGS)
+ 
+ WX_CONFIGURE_FLAGS += --enable-unicode -disable-shared --disable-dependency-tracking --disable-compat26 --enable-exceptions --enable-std_string --enable-dataobj --enable-mimetype \
+ 	--disable-protocol --disable-protocols --disable-url --disable-ipc --disable-sockets --disable-fs_inet --disable-ole --disable-docview --disable-clipboard \
+-	--disable-help --disable-html --disable-mshtmlhelp --disable-htmlhelp --disable-mdi --disable-metafile --disable-webkit \
++	--disable-help --disable-html --disable-mshtmlhelp --disable-htmlhelp --disable-mdi --disable-metafile --disable-webkit --disable-webview \
+ 	--disable-xrc --disable-aui --disable-postscript --disable-printarch \
+ 	--disable-arcstream --disable-fs_archive --disable-fs_zip --disable-tarstream --disable-zipstream \
+ 	--disable-animatectrl --disable-bmpcombobox --disable-calendar --disable-caret --disable-checklst --disable-collpane --disable-colourpicker --disable-comboctrl \
+@@ -251,12 +270,17 @@
+ 	--disable-listbook --disable-odcombobox --disable-sash  --disable-searchctrl --disable-slider --disable-splitter --disable-togglebtn \
+ 	--disable-toolbar --disable-tbarnative --disable-treebook --disable-toolbook --disable-tipwindow --disable-popupwin \
+ 	--disable-commondlg --disable-aboutdlg --disable-coldlg --disable-finddlg --disable-fontdlg --disable-numberdlg --disable-splash \
+-	--disable-tipdlg --disable-progressdlg --disable-wizarddlg --disable-miniframe --disable-tooltips --disable-splines --disable-palette \
+-	--disable-richtext --disable-dialupman --disable-debugreport --disable-filesystem \
++	--disable-tipdlg --disable-progressdlg --disable-wizarddlg --disable-miniframe --disable-splines --disable-palette \
++	--disable-richtext --disable-dialupman --disable-debugreport --disable-filesystem --disable-rearrangectrl --disable-treelist --disable-richmsgdlg \
++	--disable-richtooltip --disable-propgrid --disable-stc --without-libnotify \
++	--without-gtkprint --without-gnomevfs --disable-fsvolume --disable-fswatcher \
+ 	--disable-graphics_ctx --disable-sound --disable-mediactrl --disable-joystick --disable-apple_ieee \
+-	--disable-gif --disable-pcx --disable-tga --disable-iff --disable-gif --disable-pnm \
++	--disable-gif --disable-pcx --disable-tga --disable-iff --disable-gif --disable-pnm --disable-svg \
+ 	--without-expat --without-libtiff --without-libjpeg --without-libpng -without-regex --without-zlib
+ 
++ifeq "$(PLATFORM)" "Linux"	
++WX_CONFIGURE_FLAGS += --disable-tooltips
++endif
+ 
+ #------ Project build ------
+ 

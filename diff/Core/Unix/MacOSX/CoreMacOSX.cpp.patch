@@ -1,0 +1,81 @@
+--- ./Core/Unix/MacOSX/CoreMacOSX.cpp	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Core/Unix/MacOSX/CoreMacOSX.cpp	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ /*
+- Copyright (c) 2008-2009 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #include <fstream>
+@@ -15,11 +19,12 @@
+ #include <sys/sysctl.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
++#include <sys/stat.h>
+ #include "CoreMacOSX.h"
+ #include "Driver/Fuse/FuseService.h"
+ #include "Core/Unix/CoreServiceProxy.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	CoreMacOSX::CoreMacOSX ()
+ 	{
+@@ -111,9 +116,29 @@
+ 		// Check FUSE version
+ 		char fuseVersionString[MAXHOSTNAMELEN + 1] = { 0 };
+ 		size_t fuseVersionStringLength = MAXHOSTNAMELEN;
++		int status;
++		bool bIsOSXFuse = false;
+ 
+-		if (sysctlbyname ("macfuse.version.number", fuseVersionString, &fuseVersionStringLength, NULL, 0) != 0)
+-			throw HigherFuseVersionRequired (SRC_POS);
++		if ((status = sysctlbyname ("macfuse.version.number", fuseVersionString, &fuseVersionStringLength, NULL, 0)) != 0)
++		{
++			fuseVersionStringLength = MAXHOSTNAMELEN;
++			if ((status = sysctlbyname ("osxfuse.version.number", fuseVersionString, &fuseVersionStringLength, NULL, 0)) != 0)
++			{
++				throw HigherFuseVersionRequired (SRC_POS);
++			}
++			else
++			{
++				// look for compatibility mode
++				struct stat sb;
++				if ((0 == stat("/usr/local/lib/libfuse.dylib", &sb)) && (0 == stat("/Library/Frameworks/MacFUSE.framework/MacFUSE", &sb)))
++				{
++					bIsOSXFuse = true;
++				}
++				else
++					throw HigherFuseVersionRequired (SRC_POS);
++			}
++			
++		}
+ 
+ 		vector <string> fuseVersion = StringConverter::Split (string (fuseVersionString), ".");
+ 		if (fuseVersion.size() < 2)
+@@ -122,7 +147,12 @@
+ 		uint32 fuseVersionMajor = StringConverter::ToUInt32 (fuseVersion[0]);
+ 		uint32 fuseVersionMinor = StringConverter::ToUInt32 (fuseVersion[1]);
+ 
+-		if (fuseVersionMajor < 1 || (fuseVersionMajor == 1 && fuseVersionMinor < 3))
++		if (bIsOSXFuse)
++		{
++			if (fuseVersionMajor < 2 || (fuseVersionMajor == 2 && fuseVersionMinor < 5))
++				throw HigherFuseVersionRequired (SRC_POS);
++		}
++		else if (fuseVersionMajor < 1 || (fuseVersionMajor == 1 && fuseVersionMinor < 3))
+ 			throw HigherFuseVersionRequired (SRC_POS);
+ 
+ 		// Mount volume image

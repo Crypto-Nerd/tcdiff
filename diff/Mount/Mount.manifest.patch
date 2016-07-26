@@ -1,0 +1,20 @@
+--- ./Mount/Mount.manifest	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Mount/Mount.manifest	2016-02-14 12:11:21.000000000 +0300
+@@ -18,4 +18,16 @@
+       <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
+     </application>
+   </compatibility>
++  <dependency>
++    <dependentAssembly>
++      <assemblyIdentity
++        type="win32"
++        name="Microsoft.Windows.Common-Controls"
++        version="6.0.0.0"
++        processorArchitecture="*"
++        publicKeyToken="6595b64144ccf1df"
++        language="*"
++      />
++    </dependentAssembly>
++  </dependency>
+ </assembly>
+\ No newline at end of file

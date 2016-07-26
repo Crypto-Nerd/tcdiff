@@ -1,0 +1,57 @@
+--- ./Format/FormatCom.idl	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Format/FormatCom.idl	2016-02-14 12:11:21.000000000 +0300
+@@ -1,26 +1,30 @@
+ /*
+- Copyright (c) 2007-2010 TrueCrypt Developers Association. All rights reserved.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
+ 
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ import "wtypes.idl";
+ import "..\Common\Password.h";
+ 
+ [
+-	uuid(A7DF958C-0716-49E9-8C3E-53A775797576),
+-	helpstring("TrueCrypt Format UAC Support Library"),
+-	version(2.4)	// Update ComSetup.cpp when changing version number
++	uuid(56327DDA-F1A7-4e13-B128-520D129BDEF6),
++	helpstring("VeraCrypt Format UAC Support Library"),
++	version(2.5)	// Update ComSetup.cpp when changing version number
+ ]
+ library TrueCryptFormatCom
+ {
+ 	[
+-		uuid(9EE02955-174A-48F1-820C-022F327BE109),
++		uuid(7AB357D9-A17F-466e-BCD6-F49E97C218D8),
+ 		object,
+ 		oleautomation,
+-		helpstring("TrueCrypt Format UAC Support Interface")
++		helpstring("VeraCrypt Format UAC Support Interface")
+ 	]
+ 	interface ITrueCryptFormatCom : IUnknown
+ 	{
+@@ -35,11 +39,12 @@
+ 		DWORD RegisterSystemFavoritesService (BOOL registerService);
+ 		DWORD SetDriverServiceStartType (DWORD startType);
+ 		DWORD WriteLocalMachineRegistryDwordValue (BSTR keyPath, BSTR valueName, DWORD value);
++		BOOL FormatFs (int driveNo, int clusterSize, int fsType);
+ 	};
+ 
+ 	[
+-		uuid(777DCDFD-C330-480B-B582-B02B57580CC9),
+-		helpstring("TrueCrypt Format UAC Support Coclass")
++		uuid(A96D3797-9F31-49f4-A0CE-9657392CF789),
++		helpstring("VeraCrypt Format UAC Support Coclass")
+ 	]
+ 	coclass TrueCryptFormatCom
+ 	{

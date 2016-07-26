@@ -1,0 +1,673 @@
+--- ./Main/GraphicUserInterface.cpp	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Main/GraphicUserInterface.cpp	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ /*
+- Copyright (c) 2008-2009 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #include "System.h"
+@@ -31,12 +35,13 @@
+ #include "Forms/RandomPoolEnrichmentDialog.h"
+ #include "Forms/SecurityTokenKeyfilesDialog.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	GraphicUserInterface::GraphicUserInterface () :
+ 		ActiveFrame (nullptr),
+ 		BackgroundMode (false),
+-		mMainFrame (nullptr)
++		mMainFrame (nullptr),
++		mWaitDialog (nullptr)
+ 	{
+ #ifdef TC_UNIX
+ 		signal (SIGHUP, OnSignal);
+@@ -173,18 +178,26 @@
+ 				try
+ 				{
+ 					wxBusyCursor busy;
+-					volume = Core->OpenVolume (
++					OpenVolumeThreadRoutine routine(
+ 						options->Path,
+ 						options->PreserveTimestamps,
+ 						options->Password,
++						options->Pim,
++						options->Kdf,
++						false,
+ 						options->Keyfiles,
+ 						options->Protection,
+ 						options->ProtectionPassword,
++						options->ProtectionPim,
++						options->ProtectionKdf,
+ 						options->ProtectionKeyfiles,
+ 						true,
+ 						volumeType,
+ 						options->UseBackupHeaders
+ 						);
++
++						ExecuteWaitThreadRoutine (parent, &routine);		
++						volume = routine.m_pVolume;
+ 				}
+ 				catch (PasswordException &e)
+ 				{
+@@ -230,7 +243,7 @@
+ 
+ 		if (hiddenVolume)
+ 		{
+-			if (typeid (*normalVolume->GetLayout()) == typeid (VolumeLayoutV1Normal) && typeid (*hiddenVolume->GetLayout()) != typeid (VolumeLayoutV1Hidden))
++			if (typeid (*normalVolume->GetLayout()) == typeid (VolumeLayoutV1Normal))
+ 				throw ParameterIncorrect (SRC_POS);
+ 
+ 			if (typeid (*normalVolume->GetLayout()) == typeid (VolumeLayoutV2Normal) && typeid (*hiddenVolume->GetLayout()) != typeid (VolumeLayoutV2Hidden))
+@@ -239,7 +252,6 @@
+ 
+ 		// Ask user to select backup file path
+ 		wxString confirmMsg = LangString["CONFIRM_VOL_HEADER_BAK"];
+-		confirmMsg.Replace (L"%hs", L"%s");
+ 
+ 		if (!AskYesNo (wxString::Format (confirmMsg, wstring (*volumePath).c_str()), true))
+ 			return;
+@@ -252,6 +264,8 @@
+ 		backupFile.Open (*files.front(), File::CreateWrite);
+ 
+ 		RandomNumberGenerator::Start();
++		/* force the display of the random enriching interface */
++		RandomNumberGenerator::SetEnrichedByUserStatus (false);
+ 		UserEnrichRandomPool (nullptr);
+ 
+ 		{
+@@ -259,14 +273,18 @@
+ 
+ 			// Re-encrypt volume header
+ 			SecureBuffer newHeaderBuffer (normalVolume->GetLayout()->GetHeaderSize());
+-			Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, normalVolume->GetHeader(), normalVolumeMountOptions.Password, normalVolumeMountOptions.Keyfiles);
++			ReEncryptHeaderThreadRoutine routine(newHeaderBuffer, normalVolume->GetHeader(), normalVolumeMountOptions.Password, normalVolumeMountOptions.Pim, normalVolumeMountOptions.Keyfiles);
++
++			ExecuteWaitThreadRoutine (parent, &routine);
+ 
+ 			backupFile.Write (newHeaderBuffer);
+ 
+ 			if (hiddenVolume)
+ 			{
+ 				// Re-encrypt hidden volume header
+-				Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, hiddenVolume->GetHeader(), hiddenVolumeMountOptions.Password, hiddenVolumeMountOptions.Keyfiles);
++				ReEncryptHeaderThreadRoutine hiddenRoutine(newHeaderBuffer, hiddenVolume->GetHeader(), hiddenVolumeMountOptions.Password, hiddenVolumeMountOptions.Pim, hiddenVolumeMountOptions.Keyfiles);
++
++				ExecuteWaitThreadRoutine (parent, &hiddenRoutine);
+ 			}
+ 			else
+ 			{
+@@ -396,12 +414,22 @@
+ 		{
+ 			virtual void operator() (string &passwordStr)
+ 			{
+-				wxPasswordEntryDialog dialog (Gui->GetActiveWindow(), _("Enter your user password or administrator password:"), _("Administrator privileges required"));
+ 
+-				if (dialog.ShowModal() != wxID_OK)
+-					throw UserAbort (SRC_POS);
+-
+-				wstring wPassword (dialog.GetValue());	// A copy of the password is created here by wxWidgets, which cannot be erased
++				wxString sValue;
++				if (Gui->GetWaitDialog())
++				{
++					Gui->GetWaitDialog()->RequestAdminPassword(sValue);
++					if (sValue.IsEmpty())
++						throw UserAbort (SRC_POS);
++				}
++				else
++				{
++					wxPasswordEntryDialog dialog (Gui->GetActiveWindow(), _("Enter your user password or administrator password:"), _("Administrator privileges required"));
++					if (dialog.ShowModal() != wxID_OK)
++						throw UserAbort (SRC_POS);
++					sValue = dialog.GetValue();
++				}
++				wstring wPassword (sValue);	// A copy of the password is created here by wxWidgets, which cannot be erased
+ 				finally_do_arg (wstring *, &wPassword, { StringConverter::Erase (*finally_arg); });
+ 
+ 				StringConverter::ToSingle (wPassword, passwordStr);
+@@ -512,13 +540,25 @@
+ 				if (Gui->GetPreferences().NonInteractive)
+ 					throw MissingArgument (SRC_POS);
+ 
+-				wxPasswordEntryDialog dialog (Gui->GetActiveWindow(), wxString::Format (LangString["ENTER_TOKEN_PASSWORD"], StringConverter::ToWide (passwordStr).c_str()), LangString["IDD_TOKEN_PASSWORD"]);
+-				dialog.SetSize (wxSize (Gui->GetCharWidth (&dialog) * 50, -1));
++				wxString sValue;
++				if (Gui->GetWaitDialog())
++				{
++					sValue = StringConverter::ToWide (passwordStr).c_str();
++					Gui->GetWaitDialog()->RequestPin (sValue);
++					if (sValue.IsEmpty ())
++						throw UserAbort (SRC_POS);
++				}
++				else
++				{
++					wxPasswordEntryDialog dialog (Gui->GetActiveWindow(), wxString::Format (LangString["ENTER_TOKEN_PASSWORD"], StringConverter::ToWide (passwordStr).c_str()), LangString["IDD_TOKEN_PASSWORD"]);
++					dialog.SetSize (wxSize (Gui->GetCharWidth (&dialog) * 50, -1));
+ 
+-				if (dialog.ShowModal() != wxID_OK)
+-					throw UserAbort (SRC_POS);
++					if (dialog.ShowModal() != wxID_OK)
++						throw UserAbort (SRC_POS);
++					sValue = dialog.GetValue();
++				}
+ 
+-				wstring wPassword (dialog.GetValue());	// A copy of the password is created here by wxWidgets, which cannot be erased
++				wstring wPassword (sValue);	// A copy of the password is created here by wxWidgets, which cannot be erased
+ 				finally_do_arg (wstring *, &wPassword, { StringConverter::Erase (*finally_arg); });
+ 
+ 				StringConverter::ToSingle (wPassword, passwordStr);
+@@ -587,10 +627,20 @@
+ 	}
+ 
+ #ifdef TC_MACOSX
+-	void GraphicUserInterface::MacOpenFile (const wxString &fileName)
++	void GraphicUserInterface::MacOpenFiles (const wxArrayString &fileNames)
++	{
++		if (fileNames.GetCount() > 0)
++		{
++			// we can only put one volume path at a time on the text field
++			// so we take the first on the list
++			OpenVolumeSystemRequestEventArgs eventArgs (fileNames[0]);
++			OpenVolumeSystemRequestEvent.Raise (eventArgs);
++		}
++	}
++
++	void GraphicUserInterface::MacReopenApp ()
+ 	{
+-		OpenVolumeSystemRequestEventArgs eventArgs (fileName);
+-		OpenVolumeSystemRequestEvent.Raise (eventArgs);
++		SetBackgroundMode (false);
+ 	}
+ #endif
+ 
+@@ -681,7 +731,7 @@
+ 				options.Keyfiles = make_shared <KeyfileList> (GetPreferences().DefaultKeyfiles);
+ 
+ 			if ((options.Password && !options.Password->IsEmpty())
+-				|| (options.Keyfiles && !options.Keyfiles->empty()))
++				|| (options.Keyfiles && !options.Keyfiles->empty() && (options.TrueCryptMode || options.Password)))
+ 			{
+ 				try
+ 				{
+@@ -743,7 +793,6 @@
+ #ifdef TC_LINUX
+ 		if (volume && !Preferences.NonInteractive && !Preferences.DisableKernelEncryptionModeWarning
+ 			&& volume->EncryptionModeName != L"XTS"
+-			&& (volume->EncryptionModeName != L"LRW" || volume->EncryptionAlgorithmMinBlockSize != 16 || volume->EncryptionAlgorithmKeySize != 32)
+ 			&& !AskYesNo (LangString["ENCRYPTION_MODE_NOT_SUPPORTED_BY_KERNEL"] + _("\n\nDo you want to show this message next time you mount such a volume?"), true, true))
+ 		{
+ 			UserPreferences prefs = GetPreferences();
+@@ -808,8 +857,9 @@
+ 
+ 			wxLogLevel logLevel = wxLog::GetLogLevel();
+ 			wxLog::SetLogLevel (wxLOG_Error);
+-
+-			SingleInstanceChecker.reset (new wxSingleInstanceChecker (wxString (L".") + Application::GetName() + L"-lock-" + wxGetUserId()));
++			
++			const wxString instanceCheckerName = wxString (L".") + Application::GetName() + L"-lock-" + wxGetUserId();
++			SingleInstanceChecker.reset (new wxSingleInstanceChecker (instanceCheckerName));
+ 
+ 			wxLog::SetLogLevel (logLevel);
+ 
+@@ -844,6 +894,7 @@
+ 					if (write (showFifo, buf, 1) == 1)
+ 					{
+ 						close (showFifo);
++						Gui->ShowInfo (_("VeraCrypt is already running."));
+ 						Application::SetExitCode (0);
+ 						return false;
+ 					}
+@@ -856,12 +907,28 @@
+ 					throw;
+ #endif
+ 				}
+-#endif
++
++				// This is a false positive as VeraCrypt is not running (pipe not available)
++				// we continue running after cleaning the lock file
++				// and creating a new instance of the checker
++				wxString lockFileName = wxGetHomeDir();
++				if ( lockFileName.Last() != wxT('/') )
++				{
++					lockFileName += wxT('/');
++				}
++				lockFileName << instanceCheckerName;
++
++				if (wxRemoveFile (lockFileName))
++				{
++					SingleInstanceChecker.reset (new wxSingleInstanceChecker (instanceCheckerName));
++				}
++#else
+ 
+ 				wxLog::FlushActive();
+ 				Application::SetExitCode (1);
+-				Gui->ShowInfo (_("TrueCrypt is already running."));
++				Gui->ShowInfo (_("VeraCrypt is already running."));
+ 				return false;
++#endif
+ 			}
+ 
+ #ifdef TC_WINDOWS
+@@ -997,13 +1064,8 @@
+ 		{
+ 			try
+ 			{
+-#ifdef TC_MACOSX
+ 				if (wxExecute (fileType->GetOpenCommand (document.GetFullPath())) != 0)
+ 					return;
+-#else
+-				if (wxExecute (fileType->GetOpenCommand (L"\"" + document.GetFullPath() + L"\"")) != 0)
+-					return;
+-#endif
+ 			}
+ 			catch (TimeOut&) { }
+ 		}
+@@ -1012,46 +1074,115 @@
+ 
+ 	wxString GraphicUserInterface::GetHomepageLinkURL (const wxString &linkId, bool secure, const wxString &extraVars) const
+ 	{
+-		wxString url = wxString (StringConverter::ToWide (secure ? TC_APPLINK_SECURE : TC_APPLINK)) + L"&dest=" + linkId;
+-		wxString os, osVersion, architecture;
+-
+-#ifdef TC_WINDOWS
+-
+-		os = L"Windows";
+-
+-#elif defined (TC_UNIX)
+-		struct utsname unameData;
+-		if (uname (&unameData) != -1)
++		wxString url = wxString (StringConverter::ToWide (secure ? TC_APPLINK_SECURE : TC_APPLINK));
++		
++		if (linkId == L"donate") 
+ 		{
+-			os = StringConverter::ToWide (unameData.sysname);
+-			osVersion = StringConverter::ToWide (unameData.release);
+-			architecture = StringConverter::ToWide (unameData.machine);
+-
+-			if (os == L"Darwin")
+-				os = L"MacOSX";
++			url = L"https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=5BCXVMTTNJDCY";
+ 		}
+-		else
+-			os = L"Unknown";
+-#else
+-		os = L"Unknown";
+-#endif
+-
+-		os.Replace (L" ", L"-");
+-		url += L"&os=";
+-		url += os;
+-
+-		osVersion.Replace (L" ", L"-");
+-		url += L"&osver=";
+-		url += osVersion;
+-
+-		architecture.Replace (L" ", L"-");
+-		url += L"&arch=";
+-		url += architecture;
+-
+-		if (!extraVars.empty())
++		else if (linkId == L"main") 
++		{
++			url = wxString (StringConverter::ToWide (TC_HOMEPAGE));
++		}
++		else if (linkId == L"localizations") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Language%20Packs";
++		}
++		else if (linkId == L"beginnerstutorial" || linkId == L"tutorial") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Beginner%27s%20Tutorial";
++		}
++		else if (linkId == L"releasenotes" || linkId == L"history") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Release%20Notes";
++		}
++		else if (linkId == L"hwacceleration") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Hardware%20Acceleration";
++		}
++		else if (linkId == L"parallelization") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Parallelization";
++		}
++		else if (linkId == L"help") 
+ 		{
+-			 url += L"&";
+-			 url += extraVars;
++			url = L"https://veracrypt.codeplex.com/documentation";
++		}
++		else if (linkId == L"keyfiles") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Keyfiles";
++		}
++		else if (linkId == L"introcontainer") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Creating%20New%20Volumes";
++		}
++		else if (linkId == L"introsysenc") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=System%20Encryption";
++		}
++		else if (linkId == L"hiddensysenc") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=VeraCrypt%20Hidden%20Operating%20System";
++		}
++		else if (linkId == L"sysencprogressinfo") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=System%20Encryption";
++		}
++		else if (linkId == L"hiddenvolume") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Hidden%20Volume";
++		}
++		else if (linkId == L"aes") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=AES";
++		}
++		else if (linkId == L"serpent") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Serpent";
++		}
++		else if (linkId == L"twofish") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Twofish";
++		}
++		else if (linkId == L"cascades") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Cascades";
++		}
++		else if (linkId == L"hashalgorithms") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Hash%20Algorithms";
++		}
++		else if (linkId == L"isoburning") 
++		{
++			url = L"https://cdburnerxp.se/en/home";
++		}
++		else if (linkId == L"sysfavorites") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=System%20Favorite%20Volumes";
++		}
++		else if (linkId == L"favorites") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Favorite%20Volumes";
++		}
++		else if (linkId == L"hiddenvolprotection") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Protection%20of%20Hidden%20Volumes";
++		}
++		else if (linkId == L"faq") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=FAQ";
++		}
++		else if (linkId == L"downloads") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Downloads";
++		}
++		else if (linkId == L"news") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=News";
++		}
++		else if (linkId == L"contact") 
++		{
++			url = L"https://veracrypt.codeplex.com/wikipage?title=Contact";
+ 		}
+ 
+ 		return url;
+@@ -1079,13 +1210,13 @@
+ 			wxString docPath = wstring (Application::GetExecutableDirectory());
+ 
+ #ifdef TC_RESOURCE_DIR
+-			docPath = StringConverter::ToWide (string (TC_TO_STRING (TC_RESOURCE_DIR)) + "/doc/TrueCrypt User Guide.pdf");
++			docPath = StringConverter::ToWide (string (TC_TO_STRING (TC_RESOURCE_DIR)) + "/doc/VeraCrypt User Guide.pdf");
+ #elif defined (TC_WINDOWS)
+-			docPath += L"\\TrueCrypt User Guide.pdf";
++			docPath += L"\\VeraCrypt User Guide.pdf";
+ #elif defined (TC_MACOSX)
+-			docPath += L"/../Resources/TrueCrypt User Guide.pdf";
++			docPath += L"/../Resources/VeraCrypt User Guide.pdf";
+ #elif defined (TC_UNIX)
+-			docPath = L"/usr/share/truecrypt/doc/TrueCrypt User Guide.pdf";
++			docPath = L"/usr/share/veracrypt/doc/VeraCrypt User Guide.pdf";
+ #else
+ #	error TC_RESOURCE_DIR undefined
+ #endif
+@@ -1170,6 +1301,9 @@
+ 		default:
+ 			return;
+ 		}
++		
++		/* force the display of the random enriching interface */
++		RandomNumberGenerator::SetEnrichedByUserStatus (false);
+ 
+ 		if (restoreInternalBackup)
+ 		{
+@@ -1189,18 +1323,26 @@
+ 				try
+ 				{
+ 					wxBusyCursor busy;
+-					volume = Core->OpenVolume (
++					OpenVolumeThreadRoutine routine(
+ 						options.Path,
+ 						options.PreserveTimestamps,
+ 						options.Password,
++						options.Pim,
++						options.Kdf,
++						options.TrueCryptMode,
+ 						options.Keyfiles,
+ 						options.Protection,
+ 						options.ProtectionPassword,
++						options.ProtectionPim,
++						options.ProtectionKdf,
+ 						options.ProtectionKeyfiles,
+ 						options.SharedAccessAllowed,
+ 						VolumeType::Unknown,
+ 						true
+ 						);
++
++						ExecuteWaitThreadRoutine (parent, &routine);		
++						volume = routine.m_pVolume;
+ 				}
+ 				catch (PasswordException &e)
+ 				{
+@@ -1209,7 +1351,7 @@
+ 			}
+ 
+ 			shared_ptr <VolumeLayout> layout = volume->GetLayout();
+-			if (typeid (*layout) == typeid (VolumeLayoutV1Normal) || typeid (*layout) == typeid (VolumeLayoutV1Hidden))
++			if (typeid (*layout) == typeid (VolumeLayoutV1Normal))
+ 			{
+ 				ShowError ("VOLUME_HAS_NO_BACKUP_HEADER");
+ 				return;
+@@ -1219,8 +1361,11 @@
+ 			UserEnrichRandomPool (nullptr);
+ 
+ 			// Re-encrypt volume header
++			wxBusyCursor busy;
+ 			SecureBuffer newHeaderBuffer (volume->GetLayout()->GetHeaderSize());
+-			Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, volume->GetHeader(), options.Password, options.Keyfiles);
++			ReEncryptHeaderThreadRoutine routine(newHeaderBuffer, volume->GetHeader(), options.Password, options.Pim, options.Keyfiles);
++
++			ExecuteWaitThreadRoutine (parent, &routine);
+ 
+ 			// Write volume header
+ 			int headerOffset = volume->GetLayout()->GetHeaderOffset();
+@@ -1238,7 +1383,6 @@
+ 			// Restore header from an external backup
+ 
+ 			wxString confirmMsg = LangString["CONFIRM_VOL_HEADER_RESTORE"];
+-			confirmMsg.Replace (L"%hs", L"%s");
+ 
+ 			if (!AskYesNo (wxString::Format (confirmMsg, wstring (*volumePath).c_str()), true, true))
+ 				return;
+@@ -1250,19 +1394,16 @@
+ 			File backupFile;
+ 			backupFile.Open (*files.front(), File::OpenRead);
+ 
+-			uint64 headerSize;
+ 			bool legacyBackup;
+ 
+ 			// Determine the format of the backup file
+ 			switch (backupFile.Length())
+ 			{
+ 			case TC_VOLUME_HEADER_GROUP_SIZE:
+-				headerSize = TC_VOLUME_HEADER_SIZE;
+ 				legacyBackup = false;
+ 				break;
+ 
+ 			case TC_VOLUME_HEADER_SIZE_LEGACY * 2:
+-				headerSize = TC_VOLUME_HEADER_SIZE_LEGACY;
+ 				legacyBackup = true;
+ 				break;
+ 
+@@ -1293,7 +1434,7 @@
+ 						if (layout->HasDriveHeader())
+ 							continue;
+ 
+-						if (!legacyBackup && (typeid (*layout) == typeid (VolumeLayoutV1Normal) || typeid (*layout) == typeid (VolumeLayoutV1Hidden)))
++						if (!legacyBackup && (typeid (*layout) == typeid (VolumeLayoutV1Normal)))
+ 							continue;
+ 
+ 						if (legacyBackup && (typeid (*layout) == typeid (VolumeLayoutV2Normal) || typeid (*layout) == typeid (VolumeLayoutV2Hidden)))
+@@ -1304,7 +1445,15 @@
+ 
+ 						// Decrypt header
+ 						shared_ptr <VolumePassword> passwordKey = Keyfile::ApplyListToPassword (options.Keyfiles, options.Password);
+-						if (layout->GetHeader()->Decrypt (headerBuffer, *passwordKey, layout->GetSupportedKeyDerivationFunctions(), layout->GetSupportedEncryptionAlgorithms(), layout->GetSupportedEncryptionModes()))
++						Pkcs5KdfList keyDerivationFunctions = layout->GetSupportedKeyDerivationFunctions(options.TrueCryptMode);
++						EncryptionAlgorithmList encryptionAlgorithms = layout->GetSupportedEncryptionAlgorithms();
++						EncryptionModeList encryptionModes = layout->GetSupportedEncryptionModes();
++
++						DecryptThreadRoutine decryptRoutine(layout->GetHeader(), headerBuffer, *passwordKey, options.Pim, options.Kdf, options.TrueCryptMode, keyDerivationFunctions, encryptionAlgorithms, encryptionModes);						
++
++						ExecuteWaitThreadRoutine (parent, &decryptRoutine);
++
++						if (decryptRoutine.m_bResult)
+ 						{
+ 							decryptedLayout = layout;
+ 							break;
+@@ -1327,8 +1476,11 @@
+ 			UserEnrichRandomPool (nullptr);
+ 
+ 			// Re-encrypt volume header
++			wxBusyCursor busy;
+ 			SecureBuffer newHeaderBuffer (decryptedLayout->GetHeaderSize());
+-			Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, decryptedLayout->GetHeader(), options.Password, options.Keyfiles);
++			ReEncryptHeaderThreadRoutine routine(newHeaderBuffer, decryptedLayout->GetHeader(), options.Password, options.Pim, options.Keyfiles);
++
++			ExecuteWaitThreadRoutine (parent, &routine);
+ 
+ 			// Write volume header
+ 			int headerOffset = decryptedLayout->GetHeaderOffset();
+@@ -1342,7 +1494,9 @@
+ 			if (decryptedLayout->HasBackupHeader())
+ 			{
+ 				// Re-encrypt backup volume header
+-				Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, decryptedLayout->GetHeader(), options.Password, options.Keyfiles);
++				ReEncryptHeaderThreadRoutine backupRoutine(newHeaderBuffer, decryptedLayout->GetHeader(), options.Password, options.Pim, options.Keyfiles);
++
++				ExecuteWaitThreadRoutine (parent, &backupRoutine);
+ 				
+ 				// Write backup volume header
+ 				headerOffset = decryptedLayout->GetBackupHeaderOffset();
+@@ -1384,7 +1538,7 @@
+ #else
+ 			L"",
+ #endif
+-			L"", wxDD_DEFAULT_STYLE | (existingOnly ? wxDD_DIR_MUST_EXIST : 0), wxDefaultPosition, parent));
++			L"", wxDD_DEFAULT_STYLE | (existingOnly ? wxDD_DIR_MUST_EXIST : 0), wxDefaultPosition, parent).wc_str());
+ 	}
+ 
+ 	FilePathList GraphicUserInterface::SelectFiles (wxWindow *parent, const wxString &caption, bool saveMode, bool allowMultiple, const list < pair <wstring, wstring> > &fileExtensions, const DirectoryPath &directory) const
+@@ -1428,14 +1582,14 @@
+ 		if (dialog.ShowModal() == wxID_OK)
+ 		{
+ 			if (!allowMultiple)
+-				files.push_back (make_shared <FilePath> (dialog.GetPath()));
++				files.push_back (make_shared <FilePath> (dialog.GetPath().wc_str()));
+ 			else
+ 			{
+ 				wxArrayString paths;
+ 				dialog.GetPaths (paths);
+ 
+ 				foreach (const wxString &path, paths)
+-					files.push_back (make_shared <FilePath> (path));
++					files.push_back (make_shared <FilePath> (path.wc_str()));
+ 			}
+ 		}
+ 
+@@ -1612,15 +1766,22 @@
+ 				caption.clear();
+ 		}
+ #endif
+-		if (topMost)
++		if (mWaitDialog)
+ 		{
+-			if (!IsActive())
+-				mMainFrame->RequestUserAttention (wxUSER_ATTENTION_ERROR);
+-
+-			style |= wxSTAY_ON_TOP;
++			return mWaitDialog->RequestShowMessage(subMessage, caption, style, topMost);
+ 		}
++		else
++		{
++			if (topMost)
++			{
++				if (!IsActive())
++					mMainFrame->RequestUserAttention (wxUSER_ATTENTION_ERROR);
++
++				style |= wxSTAY_ON_TOP;
++			}
+ 
+-		return wxMessageBox (subMessage, caption, style, GetActiveWindow());
++			return wxMessageBox (subMessage, caption, style, GetActiveWindow());
++		}
+ 	}
+ 
+ 	void GraphicUserInterface::ShowWarningTopMost (const wxString &message) const
+@@ -1657,6 +1818,8 @@
+ 			{
+ 				item.SetText (field);
+ 				listCtrl->SetItem (item);
++				if (item.GetColumn() == 3 || item.GetColumn() == 4)
++					listCtrl->SetColumnWidth(item.GetColumn(), wxLIST_AUTOSIZE);
+ 				changed = true;
+ 			}
+ 		}
+@@ -1684,6 +1847,22 @@
+ #endif
+ 	}
+ 
++	shared_ptr <VolumeInfo> GraphicUserInterface::MountVolumeThread (MountOptions &options) const
++	{
++		MountThreadRoutine routine(options);
++
++		ExecuteWaitThreadRoutine(GetTopWindow(), &routine);
++		return routine.m_pVolume;
++	}
++
++	void GraphicUserInterface::ExecuteWaitThreadRoutine (wxWindow *parent, WaitThreadRoutine *pRoutine) const
++	{
++		WaitDialog dlg(parent, LangString["IDT_STATIC_MODAL_WAIT_DLG_INFO"], pRoutine);
++		mWaitDialog = &dlg;
++		finally_do_arg (WaitDialog**, &mWaitDialog, { *finally_arg = nullptr; });
++		dlg.Run();
++	}
++
+ 	DEFINE_EVENT_TYPE (TC_EVENT_THREAD_EXITING);
+ 
+ 	GraphicUserInterface *Gui = nullptr;

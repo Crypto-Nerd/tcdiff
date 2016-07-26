@@ -1,0 +1,16 @@
+--- ./Crypto/Sources	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Crypto/Sources	2016-02-14 12:11:21.000000000 +0300
+@@ -12,12 +12,9 @@
+ 	Aes_hw_cpu.asm \
+ 	Aeskey.c \
+ 	Aestab.c \
+-	Blowfish.c \
+-	Cast.c \
+-	Des.c \
++	cpu.c \
+ 	Rmd160.c \
+ 	Serpent.c \
+-	Sha1.c \
+ 	Sha2.c \
+ 	Twofish.c \
+ 	Whirlpool.c

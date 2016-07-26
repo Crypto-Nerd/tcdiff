@@ -1,0 +1,613 @@
+--- ./Main/TextUserInterface.cpp	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Main/TextUserInterface.cpp	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ /*
+- Copyright (c) 2008-2010 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #include "System.h"
+@@ -21,7 +25,7 @@
+ #include "Application.h"
+ #include "TextUserInterface.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	TextUserInterface::TextUserInterface ()
+ 	{
+@@ -93,7 +97,7 @@
+ 		wchar_t passwordBuf[4096];
+ 		finally_do_arg (BufferPtr, BufferPtr (reinterpret_cast <byte *> (passwordBuf), sizeof (passwordBuf)), { finally_arg.Erase(); });
+ 
+-		make_shared_auto (VolumePassword, password);
++		shared_ptr<VolumePassword> password;
+ 
+ 		bool verPhase = false;
+ 		while (true)
+@@ -109,20 +113,18 @@
+ 
+ 			if (!verPhase && length < 1)
+ 			{
+-				password->Set (passwordBuf, 0);
+-				return password;
++				return shared_ptr <VolumePassword>(new VolumePassword ());
+ 			}
+ 
+ 			for (size_t i = 0; i < length && i < VolumePassword::MaxSize; ++i)
+ 			{
+ 				passwordBuf[i] = (wchar_t) passwordStr[i];
+-				const_cast <wchar_t *> (passwordStr.c_str())[i] = L'X';
++				const_cast <wchar_t *> (passwordStr.wc_str())[i] = L'X';
+ 			}
+ 
+ 			if (verify && verPhase)
+ 			{
+-				make_shared_auto (VolumePassword, verPassword);
+-				verPassword->Set (passwordBuf, length);
++				shared_ptr <VolumePassword> verPassword = ToUTF8Password (passwordBuf, length);
+ 
+ 				if (*password != *verPassword)
+ 				{
+@@ -133,26 +135,10 @@
+ 				}
+ 			}
+ 
+-			password->Set (passwordBuf, length);
++			password = ToUTF8Password (passwordBuf, length);
+ 
+ 			if (!verPhase)
+ 			{
+-				try
+-				{
+-					password->CheckPortability();
+-				}
+-				catch (UnportablePassword &e)
+-				{
+-					if (verify)
+-					{
+-						ShowError (e);
+-						verPhase = false;
+-						continue;
+-					}
+-
+-					ShowWarning ("UNSUPPORTED_CHARS_IN_PWD_RECOM");
+-				}
+-
+ 				if (verify)
+ 				{
+ 					if (password->Size() < VolumePassword::WarningSizeThreshold)
+@@ -180,6 +166,34 @@
+ 		return password;
+ 	}
+ 	
++	int TextUserInterface::AskPim (const wxString &message) const
++	{
++		int pim = -1;
++		wxString msg = _("Enter new PIM: ");
++		if (!message.empty())
++			msg = message + L": ";
++		while (pim < 0)
++		{
++			wstring pimStr = AskString (msg);
++			if (pimStr.empty())
++				pim = 0;
++			else
++			{
++				try
++				{
++					pim = (int) StringConverter::ToUInt32 (pimStr);
++				}
++				catch (...)
++				{
++					pim = -1;
++					continue;
++				}
++			}
++		}
++		
++		return pim;
++	}
++	
+ 	ssize_t TextUserInterface::AskSelection (ssize_t optionCount, ssize_t defaultOption) const
+ 	{
+ 		while (true)
+@@ -244,6 +258,12 @@
+ #endif
+ 
+ 		ShowInfo ("EXTERNAL_VOL_HEADER_BAK_FIRST_INFO");
++		
++		shared_ptr <Pkcs5Kdf> kdf;
++		if (CmdLine->ArgHash)
++		{
++			kdf = Pkcs5Kdf::GetAlgorithm (*CmdLine->ArgHash, false);
++		}
+ 
+ 		shared_ptr <Volume> normalVolume;
+ 		shared_ptr <Volume> hiddenVolume;
+@@ -266,6 +286,7 @@
+ 			{
+ 				ShowString (L"\n");
+ 				options->Password = AskPassword (LangString[volumeType == VolumeType::Hidden ? "ENTER_HIDDEN_VOL_PASSWORD" : "ENTER_NORMAL_VOL_PASSWORD"]);
++				options->Pim = AskPim (volumeType == VolumeType::Hidden ?_("Enter PIM for the hidden volume") : _("Enter PIM for the normal/outer volume"));
+ 				options->Keyfiles = AskKeyfiles();
+ 
+ 				try
+@@ -274,9 +295,14 @@
+ 						options->Path,
+ 						options->PreserveTimestamps,
+ 						options->Password,
++						options->Pim,
++						kdf,
++						false,
+ 						options->Keyfiles,
+ 						options->Protection,
+ 						options->ProtectionPassword,
++						options->ProtectionPim,
++						options->ProtectionKdf,
+ 						options->ProtectionKeyfiles,
+ 						true,
+ 						volumeType,
+@@ -306,7 +332,7 @@
+ 
+ 		if (hiddenVolume)
+ 		{
+-			if (typeid (*normalVolume->GetLayout()) == typeid (VolumeLayoutV1Normal) && typeid (*hiddenVolume->GetLayout()) != typeid (VolumeLayoutV1Hidden))
++			if (typeid (*normalVolume->GetLayout()) == typeid (VolumeLayoutV1Normal))
+ 				throw ParameterIncorrect (SRC_POS);
+ 
+ 			if (typeid (*normalVolume->GetLayout()) == typeid (VolumeLayoutV2Normal) && typeid (*hiddenVolume->GetLayout()) != typeid (VolumeLayoutV2Hidden))
+@@ -315,7 +341,6 @@
+ 
+ 		// Ask user to select backup file path
+ 		wxString confirmMsg = L"\n" + LangString["CONFIRM_VOL_HEADER_BAK"] + L"\n";
+-		confirmMsg.Replace (L"%hs", L"%s");
+ 
+ 		if (!AskYesNo (wxString::Format (confirmMsg, wstring (*volumePath).c_str()), true))
+ 			return;
+@@ -330,18 +355,20 @@
+ 		backupFile.Open (filePath, File::CreateWrite);
+ 
+ 		RandomNumberGenerator::Start();
++		/* force the display of the random enriching interface */
++		RandomNumberGenerator::SetEnrichedByUserStatus (false);
+ 		UserEnrichRandomPool();
+ 
+ 		// Re-encrypt volume header
+ 		SecureBuffer newHeaderBuffer (normalVolume->GetLayout()->GetHeaderSize());
+-		Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, normalVolume->GetHeader(), normalVolumeMountOptions.Password, normalVolumeMountOptions.Keyfiles);
++		Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, normalVolume->GetHeader(), normalVolumeMountOptions.Password, normalVolumeMountOptions.Pim, normalVolumeMountOptions.Keyfiles);
+ 
+ 		backupFile.Write (newHeaderBuffer);
+ 
+ 		if (hiddenVolume)
+ 		{
+ 			// Re-encrypt hidden volume header
+-			Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, hiddenVolume->GetHeader(), hiddenVolumeMountOptions.Password, hiddenVolumeMountOptions.Keyfiles);
++			Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, hiddenVolume->GetHeader(), hiddenVolumeMountOptions.Password, hiddenVolumeMountOptions.Pim, hiddenVolumeMountOptions.Keyfiles);
+ 		}
+ 		else
+ 		{
+@@ -357,7 +384,7 @@
+ 		ShowInfo ("VOL_HEADER_BACKED_UP");
+ 	}
+ 
+-	void TextUserInterface::ChangePassword (shared_ptr <VolumePath> volumePath, shared_ptr <VolumePassword> password, shared_ptr <KeyfileList> keyfiles, shared_ptr <VolumePassword> newPassword, shared_ptr <KeyfileList> newKeyfiles, shared_ptr <Hash> newHash) const
++	void TextUserInterface::ChangePassword (shared_ptr <VolumePath> volumePath, shared_ptr <VolumePassword> password, int pim, shared_ptr <Hash> currentHash, bool truecryptMode, shared_ptr <KeyfileList> keyfiles, shared_ptr <VolumePassword> newPassword, int newPim, shared_ptr <KeyfileList> newKeyfiles, shared_ptr <Hash> newHash) const
+ 	{
+ 		shared_ptr <Volume> volume;
+ 
+@@ -376,24 +403,29 @@
+ 		bool passwordInteractive = !password.get();
+ 		bool keyfilesInteractive = !keyfiles.get();
+ 
++		shared_ptr<Pkcs5Kdf> kdf;
++		if (currentHash)
++		{
++			kdf = Pkcs5Kdf::GetAlgorithm (*currentHash, truecryptMode);
++		}
++
+ 		while (true)
+ 		{
+ 			// Current password
+ 			if (!passwordInteractive)
+ 			{
+-				try
+-				{
+-					password->CheckPortability();
+-				}
+-				catch (UnportablePassword &)
+-				{
+-					ShowWarning ("UNSUPPORTED_CHARS_IN_PWD_RECOM");
+-				}
++
+ 			}
+ 			else if (!Preferences.NonInteractive)
+ 			{
+ 				password = AskPassword ();
+ 			}
++			
++			// current PIM
++			if (!truecryptMode && !Preferences.NonInteractive && (pim < 0))
++			{
++				pim = AskPim (_("Enter current PIM"));
++			}
+ 
+ 			// Current keyfiles
+ 			try
+@@ -404,7 +436,7 @@
+ 					try
+ 					{
+ 						keyfiles.reset (new KeyfileList);
+-						volume = Core->OpenVolume (volumePath, Preferences.DefaultMountOptions.PreserveTimestamps, password, keyfiles);
++						volume = Core->OpenVolume (volumePath, Preferences.DefaultMountOptions.PreserveTimestamps, password, pim, kdf, truecryptMode, keyfiles);
+ 					}
+ 					catch (PasswordException&)
+ 					{
+@@ -414,7 +446,7 @@
+ 				}	
+ 
+ 				if (!volume.get())
+-					volume = Core->OpenVolume (volumePath, Preferences.DefaultMountOptions.PreserveTimestamps, password, keyfiles);
++					volume = Core->OpenVolume (volumePath, Preferences.DefaultMountOptions.PreserveTimestamps, password, pim, kdf, truecryptMode, keyfiles);
+ 			}
+ 			catch (PasswordException &e)
+ 			{
+@@ -429,10 +461,12 @@
+ 		}
+ 
+ 		// New password
+-		if (newPassword.get())
+-			newPassword->CheckPortability();
+-		else if (!Preferences.NonInteractive)
++		if (!newPassword.get() && !Preferences.NonInteractive)
+ 			newPassword = AskPassword (_("Enter new password"), true);
++		
++		// New PIM
++		if ((newPim < 0) && !Preferences.NonInteractive)
++			newPim = AskPim (_("Enter new PIM"));
+ 
+ 		// New keyfiles
+ 		if (!newKeyfiles.get() && !Preferences.NonInteractive)
+@@ -443,10 +477,12 @@
+ 				newKeyfiles = AskKeyfiles (_("Enter new keyfile"));
+ 		}
+ 
++		/* force the display of the random enriching interface */
++		RandomNumberGenerator::SetEnrichedByUserStatus (false);
+ 		UserEnrichRandomPool();
+ 
+-		Core->ChangePassword (volume, newPassword, newKeyfiles,
+-			newHash ? Pkcs5Kdf::GetAlgorithm (*newHash) : shared_ptr <Pkcs5Kdf>());
++		Core->ChangePassword (volume, newPassword, newPim, newKeyfiles,
++			newHash ? Pkcs5Kdf::GetAlgorithm (*newHash, false) : shared_ptr <Pkcs5Kdf>());
+ 
+ 		ShowInfo ("PASSWORD_CHANGED");
+ 	}
+@@ -456,6 +492,8 @@
+ 		FilePath path;
+ 
+ 		RandomNumberGenerator::Start();
++		/* force the display of the random enriching interface */
++		RandomNumberGenerator::SetEnrichedByUserStatus (false);
+ 		UserEnrichRandomPool();
+ 
+ 		if (keyfilePath)
+@@ -643,7 +681,7 @@
+ 			{
+ 				if (!ea->IsDeprecated())
+ 				{
+-					ShowString (StringFormatter (L" {0}) {1}\n", (uint32) encryptionAlgorithms.size() + 1, ea->GetName()));
++					ShowString (StringFormatter (L" {0}) {1}\n", (uint32) encryptionAlgorithms.size() + 1, ea->GetName(true)));
+ 					encryptionAlgorithms.push_back (ea);
+ 				}
+ 			}
+@@ -672,7 +710,7 @@
+ 
+ 			shared_ptr <Hash> selectedHash = hashes[AskSelection (hashes.size(), 1) - 1];
+ 			RandomNumberGenerator::SetHash (selectedHash);
+-			options->VolumeHeaderKdf = Pkcs5Kdf::GetAlgorithm (*selectedHash);
++			options->VolumeHeaderKdf = Pkcs5Kdf::GetAlgorithm (*selectedHash, false);
+ 
+ 		}
+ 
+@@ -698,8 +736,11 @@
+ 				ShowInfo (L" 3) Linux Ext2"); filesystems.push_back (VolumeCreationOptions::FilesystemType::Ext2);
+ 				ShowInfo (L" 4) Linux Ext3"); filesystems.push_back (VolumeCreationOptions::FilesystemType::Ext3);
+ 				ShowInfo (L" 5) Linux Ext4"); filesystems.push_back (VolumeCreationOptions::FilesystemType::Ext4);
++				ShowInfo (L" 6) NTFS");       filesystems.push_back (VolumeCreationOptions::FilesystemType::NTFS);
++				ShowInfo (L" 7) exFAT");      filesystems.push_back (VolumeCreationOptions::FilesystemType::exFAT);
+ #elif defined (TC_MACOSX)
+ 				ShowInfo (L" 3) Mac OS Extended"); filesystems.push_back (VolumeCreationOptions::FilesystemType::MacOsExt);
++				ShowInfo (L" 4) exFAT");      filesystems.push_back (VolumeCreationOptions::FilesystemType::exFAT);
+ #elif defined (TC_FREEBSD) || defined (TC_SOLARIS)
+ 				ShowInfo (L" 3) UFS"); filesystems.push_back (VolumeCreationOptions::FilesystemType::UFS);
+ #endif
+@@ -722,9 +763,13 @@
+ 			ShowString (L"\n");
+ 			options->Password = AskPassword (_("Enter password"), true);
+ 		}
+-
+-		if (options->Password)
+-			options->Password->CheckPortability();
++		
++		// PIM
++		if ((options->Pim < 0) && !Preferences.NonInteractive)
++		{
++			ShowString (L"\n");
++			options->Pim = AskPim (_("Enter PIM"));
++		}
+ 
+ 		// Keyfiles
+ 		if (!options->Keyfiles && !Preferences.NonInteractive)
+@@ -741,6 +786,8 @@
+ 
+ 		// Random data
+ 		RandomNumberGenerator::Start();
++		/* force the display of the random enriching interface */
++		RandomNumberGenerator::SetEnrichedByUserStatus (false);
+ 		UserEnrichRandomPool();
+ 
+ 		ShowString (L"\n");
+@@ -763,8 +810,8 @@
+ 
+ 				ShowString (wxString::Format (L"\rDone: %7.3f%%  Speed: %9s  Left: %s         ",
+ 					100.0 - double (options->Size - progress.SizeDone) / (double (options->Size) / 100.0),
+-					speed > 0 ? SpeedToString (speed).c_str() : L" ",
+-					speed > 0 ? TimeSpanToString ((options->Size - progress.SizeDone) / speed).c_str() : L""));
++					speed > 0 ? (const wchar_t*) SpeedToString (speed).c_str() : L" ",
++					speed > 0 ? (const wchar_t*) TimeSpanToString ((options->Size - progress.SizeDone) / speed).c_str() : L""));
+ 			}
+ 
+ 			Thread::Sleep (100);
+@@ -781,11 +828,18 @@
+ 
+ 			switch (options->Filesystem)
+ 			{
++#if defined (TC_LINUX)
+ 			case VolumeCreationOptions::FilesystemType::Ext2:		fsFormatter = "mkfs.ext2"; break;
+ 			case VolumeCreationOptions::FilesystemType::Ext3:		fsFormatter = "mkfs.ext3"; break;
+ 			case VolumeCreationOptions::FilesystemType::Ext4:		fsFormatter = "mkfs.ext4"; break;
++			case VolumeCreationOptions::FilesystemType::NTFS:		fsFormatter = "mkfs.ntfs"; break;
++			case VolumeCreationOptions::FilesystemType::exFAT:		fsFormatter = "mkfs.exfat"; break;
++#elif defined (TC_MACOSX)
+ 			case VolumeCreationOptions::FilesystemType::MacOsExt:	fsFormatter = "newfs_hfs"; break;
++			case VolumeCreationOptions::FilesystemType::exFAT:		fsFormatter = "newfs_exfat"; break;
++#elif defined (TC_FREEBSD) || defined (TC_SOLARIS)
+ 			case VolumeCreationOptions::FilesystemType::UFS:		fsFormatter = "newfs" ; break;
++#endif
+ 			default: throw ParameterIncorrect (SRC_POS);
+ 			}
+ 
+@@ -794,6 +848,7 @@
+ 			mountOptions.NoFilesystem = true;
+ 			mountOptions.Protection = VolumeProtection::None;
+ 			mountOptions.Password = options->Password;
++			mountOptions.Pim = options->Pim;
+ 			mountOptions.Keyfiles = options->Keyfiles;
+ 
+ 			shared_ptr <VolumeInfo> volume = Core->MountVolume (mountOptions);
+@@ -836,6 +891,10 @@
+ 			if (options->Filesystem == VolumeCreationOptions::FilesystemType::MacOsExt && options->Size >= 10 * BYTES_PER_MB)
+ 				args.push_back ("-J");
+ 
++			// Perform a quick NTFS formatting
++			if (options->Filesystem == VolumeCreationOptions::FilesystemType::NTFS)
++				args.push_back ("-f");
++
+ 			args.push_back (string (virtualDevice));
+ 
+ 			Process::Execute (fsFormatter, args);
+@@ -1045,6 +1104,9 @@
+ 		{
+ 			if (!options.Password)
+ 				options.Password = AskPassword();
++			
++			if (!options.TrueCryptMode && (options.Pim < 0))
++				options.Pim = AskPim (_("Enter PIM"));
+ 
+ 			if (!options.Keyfiles)
+ 				options.Keyfiles = AskKeyfiles();
+@@ -1055,6 +1117,7 @@
+ 				return mountedVolumes;
+ 
+ 			options.Password.reset();
++			options.Pim = -1;
+ 		}
+ 	}
+ 	
+@@ -1107,17 +1170,10 @@
+ 			{
+ 				options.Password = AskPassword (StringFormatter (_("Enter password for {0}"), wstring (*options.Path)));
+ 			}
+-			else
++			
++			if (!options.TrueCryptMode && (options.Pim < 0))
+ 			{
+-				try
+-				{
+-					if (options.Password)
+-						options.Password->CheckPortability();
+-				}
+-				catch (UnportablePassword &)
+-				{
+-					ShowWarning ("UNSUPPORTED_CHARS_IN_PWD_RECOM");
+-				}
++				options.Pim = AskPim (StringFormatter (_("Enter PIM for {0}"), wstring (*options.Path)));
+ 			}
+ 
+ 			// Keyfiles
+@@ -1134,6 +1190,8 @@
+ 			{
+ 				if (!options.ProtectionPassword)
+ 					options.ProtectionPassword = AskPassword (_("Enter password for hidden volume"));
++				if (!options.TrueCryptMode && (options.ProtectionPim < 0))
++					options.ProtectionPim = AskPim (_("Enter PIM for hidden volume"));
+ 				if (!options.ProtectionKeyfiles)
+ 					options.ProtectionKeyfiles = AskKeyfiles (_("Enter keyfile for hidden volume"));
+ 			}
+@@ -1146,6 +1204,7 @@
+ 			{
+ 				ShowInfo (e);
+ 				options.ProtectionPassword.reset();
++				options.ProtectionPim = -1;
+ 			}
+ 			catch (PasswordIncorrect &e)
+ 			{
+@@ -1183,8 +1242,7 @@
+ 
+ #ifdef TC_LINUX
+ 		if (!Preferences.NonInteractive && !Preferences.DisableKernelEncryptionModeWarning
+-			&& volume->EncryptionModeName != L"XTS"
+-			&& (volume->EncryptionModeName != L"LRW" || volume->EncryptionAlgorithmMinBlockSize != 16 || volume->EncryptionAlgorithmKeySize != 32))
++			&& volume->EncryptionModeName != L"XTS")
+ 		{
+ 			ShowWarning (LangString["ENCRYPTION_MODE_NOT_SUPPORTED_BY_KERNEL"]);
+ 		}
+@@ -1275,6 +1333,11 @@
+ 
+ 		// Ask whether to restore internal or external backup
+ 		bool restoreInternalBackup;
++		shared_ptr <Pkcs5Kdf> kdf;
++		if (CmdLine->ArgHash)
++		{
++			kdf = Pkcs5Kdf::GetAlgorithm (*CmdLine->ArgHash, false);
++		}
+ 
+ 		ShowInfo (LangString["HEADER_RESTORE_EXTERNAL_INTERNAL"]);
+ 		ShowInfo (L"\n1) " + LangString["HEADER_RESTORE_INTERNAL"]);
+@@ -1293,6 +1356,9 @@
+ 		default:
+ 			throw UserAbort (SRC_POS);
+ 		}
++		
++		/* force the display of the random enriching interface */
++		RandomNumberGenerator::SetEnrichedByUserStatus (false);
+ 
+ 		if (restoreInternalBackup)
+ 		{
+@@ -1305,6 +1371,7 @@
+ 			{
+ 				ShowString (L"\n");
+ 				options.Password = AskPassword();
++				options.Pim = AskPim();
+ 				options.Keyfiles = AskKeyfiles();
+ 
+ 				try
+@@ -1313,9 +1380,14 @@
+ 						options.Path,
+ 						options.PreserveTimestamps,
+ 						options.Password,
++						options.Pim,
++						kdf,
++						false,
+ 						options.Keyfiles,
+ 						options.Protection,
+ 						options.ProtectionPassword,
++						options.ProtectionPim,
++						options.ProtectionKdf,
+ 						options.ProtectionKeyfiles,
+ 						options.SharedAccessAllowed,
+ 						VolumeType::Unknown,
+@@ -1329,7 +1401,7 @@
+ 			}
+ 
+ 			shared_ptr <VolumeLayout> layout = volume->GetLayout();
+-			if (typeid (*layout) == typeid (VolumeLayoutV1Normal) || typeid (*layout) == typeid (VolumeLayoutV1Hidden))
++			if (typeid (*layout) == typeid (VolumeLayoutV1Normal))
+ 			{
+ 				throw_err (LangString ["VOLUME_HAS_NO_BACKUP_HEADER"]);
+ 			}
+@@ -1339,7 +1411,7 @@
+ 
+ 			// Re-encrypt volume header
+ 			SecureBuffer newHeaderBuffer (volume->GetLayout()->GetHeaderSize());
+-			Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, volume->GetHeader(), options.Password, options.Keyfiles);
++			Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, volume->GetHeader(), options.Password, options.Pim,  options.Keyfiles);
+ 
+ 			// Write volume header
+ 			int headerOffset = volume->GetLayout()->GetHeaderOffset();
+@@ -1357,7 +1429,6 @@
+ 			// Restore header from an external backup
+ 
+ 			wxString confirmMsg = L"\n\n" + LangString["CONFIRM_VOL_HEADER_RESTORE"];
+-			confirmMsg.Replace (L"%hs", L"%s");
+ 
+ 			if (!AskYesNo (wxString::Format (confirmMsg, wstring (*volumePath).c_str()), true, true))
+ 				return;
+@@ -1371,19 +1442,16 @@
+ 			File backupFile;
+ 			backupFile.Open (filePath, File::OpenRead);
+ 
+-			uint64 headerSize;
+ 			bool legacyBackup;
+ 
+ 			// Determine the format of the backup file
+ 			switch (backupFile.Length())
+ 			{
+ 			case TC_VOLUME_HEADER_GROUP_SIZE:
+-				headerSize = TC_VOLUME_HEADER_SIZE;
+ 				legacyBackup = false;
+ 				break;
+ 
+ 			case TC_VOLUME_HEADER_SIZE_LEGACY * 2:
+-				headerSize = TC_VOLUME_HEADER_SIZE_LEGACY;
+ 				legacyBackup = true;
+ 				break;
+ 
+@@ -1399,6 +1467,7 @@
+ 			while (!decryptedLayout)
+ 			{
+ 				options.Password = AskPassword (L"\n" + LangString["ENTER_HEADER_BACKUP_PASSWORD"]);
++				options.Pim = AskPim (_("Enter PIM"));
+ 				options.Keyfiles = AskKeyfiles();
+ 
+ 				try
+@@ -1409,7 +1478,7 @@
+ 						if (layout->HasDriveHeader())
+ 							continue;
+ 
+-						if (!legacyBackup && (typeid (*layout) == typeid (VolumeLayoutV1Normal) || typeid (*layout) == typeid (VolumeLayoutV1Hidden)))
++						if (!legacyBackup && (typeid (*layout) == typeid (VolumeLayoutV1Normal)))
+ 							continue;
+ 
+ 						if (legacyBackup && (typeid (*layout) == typeid (VolumeLayoutV2Normal) || typeid (*layout) == typeid (VolumeLayoutV2Hidden)))
+@@ -1420,7 +1489,7 @@
+ 
+ 						// Decrypt header
+ 						shared_ptr <VolumePassword> passwordKey = Keyfile::ApplyListToPassword (options.Keyfiles, options.Password);
+-						if (layout->GetHeader()->Decrypt (headerBuffer, *passwordKey, layout->GetSupportedKeyDerivationFunctions(), layout->GetSupportedEncryptionAlgorithms(), layout->GetSupportedEncryptionModes()))
++						if (layout->GetHeader()->Decrypt (headerBuffer, *passwordKey, options.Pim, kdf, false, layout->GetSupportedKeyDerivationFunctions(false), layout->GetSupportedEncryptionAlgorithms(), layout->GetSupportedEncryptionModes()))
+ 						{
+ 							decryptedLayout = layout;
+ 							break;
+@@ -1444,7 +1513,7 @@
+ 
+ 			// Re-encrypt volume header
+ 			SecureBuffer newHeaderBuffer (decryptedLayout->GetHeaderSize());
+-			Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, decryptedLayout->GetHeader(), options.Password, options.Keyfiles);
++			Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, decryptedLayout->GetHeader(), options.Password, options.Pim, options.Keyfiles);
+ 
+ 			// Write volume header
+ 			int headerOffset = decryptedLayout->GetHeaderOffset();
+@@ -1458,7 +1527,7 @@
+ 			if (decryptedLayout->HasBackupHeader())
+ 			{
+ 				// Re-encrypt backup volume header
+-				Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, decryptedLayout->GetHeader(), options.Password, options.Keyfiles);
++				Core->ReEncryptVolumeHeaderWithNewSalt (newHeaderBuffer, decryptedLayout->GetHeader(), options.Password, options.Pim, options.Keyfiles);
+ 				
+ 				// Write backup volume header
+ 				headerOffset = decryptedLayout->GetBackupHeaderOffset();

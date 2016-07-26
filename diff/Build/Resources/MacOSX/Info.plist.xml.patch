@@ -1,0 +1,46 @@
+--- ./Build/Resources/MacOSX/Info.plist.xml	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Build/Resources/MacOSX/Info.plist.xml	2016-02-14 12:11:21.000000000 +0300
+@@ -6,19 +6,19 @@
+ 	<string>6.0</string>
+ 
+ 	<key>CFBundleIdentifier</key>
+-	<string>org.TrueCryptFoundation.TrueCrypt</string>
++	<string>org.idrix.VeraCrypt</string>
+ 
+ 	<key>CFBundleDevelopmentRegion</key>
+ 	<string>English</string>
+ 
+ 	<key>CFBundleExecutable</key>
+-	<string>TrueCrypt</string>
++	<string>VeraCrypt</string>
+ 
+ 	<key>CFBundleIconFile</key>
+-	<string>TrueCrypt.icns</string>
++	<string>VeraCrypt.icns</string>
+ 
+ 	<key>CFBundleName</key>
+-	<string>TrueCrypt</string>
++	<string>VeraCrypt</string>
+ 
+ 	<key>CFBundlePackageType</key>
+ 	<string>APPL</string>
+@@ -27,16 +27,16 @@
+ 	<string>TRUE</string>
+ 
+ 	<key>CFBundleVersion</key>
+-	<string>0</string>
++	<string>1.17.22</string>
+ 
+ 	<key>CFBundleShortVersionString</key>
+ 	<string>_VERSION_</string>
+ 
+ 	<key>CFBundleLongVersionString</key>
+-	<string>TrueCrypt _VERSION_</string>
++	<string>VeraCrypt _VERSION_</string>
+ 
+ 	<key>LSRequiresCarbon</key>
+-	<true/>
++	<false/>
+ 
+ 	<key>CSResourcesFileMapped</key>
+ 	<true/>

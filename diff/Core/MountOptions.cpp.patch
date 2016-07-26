@@ -1,0 +1,117 @@
+--- ./Core/MountOptions.cpp	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Core/MountOptions.cpp	2016-02-14 12:11:21.000000000 +0300
+@@ -1,16 +1,20 @@
+ /*
+- Copyright (c) 2008 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #include "MountOptions.h"
+ #include "Platform/MemoryStream.h"
+ #include "Platform/SerializerFactory.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	void MountOptions::CopyFrom (const MountOptions &other)
+ 	{
+@@ -26,21 +30,35 @@
+ 		TC_CLONE (NoHardwareCrypto);
+ 		TC_CLONE (NoKernelCrypto);
+ 		TC_CLONE_SHARED (VolumePassword, Password);
++		TC_CLONE (Pim);
++		if (other.Kdf)
++		{
++			Kdf.reset(other.Kdf->Clone());
++		}
++		else
++			Kdf.reset();
+ 		TC_CLONE_SHARED (VolumePath, Path);
+ 		TC_CLONE (PartitionInSystemEncryptionScope);
+ 		TC_CLONE (PreserveTimestamps);
+ 		TC_CLONE (Protection);
+ 		TC_CLONE_SHARED (VolumePassword, ProtectionPassword);
++		TC_CLONE (ProtectionPim);
++		if (other.ProtectionKdf)
++			ProtectionKdf.reset(other.ProtectionKdf->Clone());
++		else
++			ProtectionKdf.reset();
+ 		TC_CLONE_SHARED (KeyfileList, ProtectionKeyfiles);
+ 		TC_CLONE (Removable);
+ 		TC_CLONE (SharedAccessAllowed);
+ 		TC_CLONE (SlotNumber);
+ 		TC_CLONE (UseBackupHeaders);
++		TC_CLONE (TrueCryptMode);
+ 	}
+ 
+ 	void MountOptions::Deserialize (shared_ptr <Stream> stream)
+ 	{
+ 		Serializer sr (stream);
++		wstring nameValue;
+ 
+ 		sr.Deserialize ("CachePassword", CachePassword);
+ 		sr.Deserialize ("FilesystemOptions", FilesystemOptions);
+@@ -82,6 +100,31 @@
+ 		sr.Deserialize ("SharedAccessAllowed", SharedAccessAllowed);
+ 		sr.Deserialize ("SlotNumber", SlotNumber);
+ 		sr.Deserialize ("UseBackupHeaders", UseBackupHeaders);
++
++		sr.Deserialize ("TrueCryptMode", TrueCryptMode);
++		
++		try
++		{
++			if (!sr.DeserializeBool ("KdfNull"))
++			{
++				sr.Deserialize ("Kdf", nameValue);
++				Kdf = Pkcs5Kdf::GetAlgorithm (nameValue, TrueCryptMode);
++			}			
++		}
++		catch(...) {}
++
++		try
++		{
++			if (!sr.DeserializeBool ("ProtectionKdfNull"))
++			{
++				sr.Deserialize ("ProtectionKdf", nameValue);
++				ProtectionKdf = Pkcs5Kdf::GetAlgorithm (nameValue, TrueCryptMode);
++			}
++		}
++		catch(...) {}
++		
++		sr.Deserialize ("Pim", Pim);
++		sr.Deserialize ("ProtectionPim", ProtectionPim);
+ 	}
+ 
+ 	void MountOptions::Serialize (shared_ptr <Stream> stream) const
+@@ -123,6 +166,19 @@
+ 		sr.Serialize ("SharedAccessAllowed", SharedAccessAllowed);
+ 		sr.Serialize ("SlotNumber", SlotNumber);
+ 		sr.Serialize ("UseBackupHeaders", UseBackupHeaders);
++
++		sr.Serialize ("TrueCryptMode", TrueCryptMode);
++
++		sr.Serialize ("KdfNull", Kdf == nullptr);
++		if (Kdf)
++			sr.Serialize ("Kdf", Kdf->GetName());
++
++		sr.Serialize ("ProtectionKdfNull", ProtectionKdf == nullptr);
++		if (ProtectionKdf)
++			sr.Serialize ("ProtectionKdf", ProtectionKdf->GetName());
++		
++		sr.Serialize ("Pim", Pim);
++		sr.Serialize ("ProtectionPim", ProtectionPim);
+ 	}
+ 
+ 	TC_SERIALIZER_FACTORY_ADD_CLASS (MountOptions);

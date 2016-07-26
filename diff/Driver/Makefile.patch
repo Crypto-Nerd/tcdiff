@@ -1,0 +1,5 @@
+--- ./Driver/Makefile	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Driver/Makefile	2016-02-14 12:11:21.000000000 +0300
+@@ -1 +1 @@
+-!INCLUDE $(NTMAKEENV)\makefile.def
++!INCLUDE $(NTMAKEENV)\makefile.def

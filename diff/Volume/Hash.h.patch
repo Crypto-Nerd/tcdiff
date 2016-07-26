@@ -1,0 +1,101 @@
+--- ./Volume/Hash.h	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Volume/Hash.h	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ /*
+- Copyright (c) 2008 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #ifndef TC_HEADER_Encryption_Hash
+@@ -11,7 +15,7 @@
+ 
+ #include "Platform/Platform.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	class Hash;
+ 	typedef list < shared_ptr <Hash> > HashList;
+@@ -27,6 +31,7 @@
+ 		virtual size_t GetBlockSize () const = 0;
+ 		virtual size_t GetDigestSize () const = 0;
+ 		virtual wstring GetName () const = 0;
++		virtual wstring GetAltName () const = 0;
+ 		virtual shared_ptr <Hash> GetNew () const = 0;
+ 		virtual void Init () = 0;
+ 		bool IsDeprecated () const { return Deprecated; }
+@@ -54,6 +59,7 @@
+ 		virtual size_t GetBlockSize () const { return 64; }
+ 		virtual size_t GetDigestSize () const { return 160 / 8; }
+ 		virtual wstring GetName () const { return L"RIPEMD-160"; }
++		virtual wstring GetAltName () const { return L"RIPEMD160"; }
+ 		virtual shared_ptr <Hash> GetNew () const { return shared_ptr <Hash> (new Ripemd160); }
+ 		virtual void Init ();
+ 		virtual void ProcessData (const ConstBufferPtr &data);
+@@ -64,27 +70,28 @@
+ 		Ripemd160 (const Ripemd160 &);
+ 		Ripemd160 &operator= (const Ripemd160 &);
+ 	};
+-
+-	// SHA-1
+-	class Sha1 : public Hash
++	
++	// SHA-256
++	class Sha256 : public Hash
+ 	{
+ 	public:
+-		Sha1 ();
+-		virtual ~Sha1 () { }
++		Sha256 ();
++		virtual ~Sha256 () { }
+ 
+ 		virtual void GetDigest (const BufferPtr &buffer);
+ 		virtual size_t GetBlockSize () const { return 64; }
+-		virtual size_t GetDigestSize () const { return 160 / 8; }
+-		virtual wstring GetName () const { return L"SHA-1"; }
+-		virtual shared_ptr <Hash> GetNew () const { return shared_ptr <Hash> (new Sha1); }
++		virtual size_t GetDigestSize () const { return 256 / 8; }
++		virtual wstring GetName () const { return L"SHA-256"; }
++		virtual wstring GetAltName () const { return L"SHA256"; }
++		virtual shared_ptr <Hash> GetNew () const { return shared_ptr <Hash> (new Sha256); }
+ 		virtual void Init ();
+ 		virtual void ProcessData (const ConstBufferPtr &data);
+ 
+ 	protected:
+ 
+ 	private:
+-		Sha1 (const Sha1 &);
+-		Sha1 &operator= (const Sha1 &);
++		Sha256 (const Sha256 &);
++		Sha256 &operator= (const Sha256 &);
+ 	};
+ 
+ 	// SHA-512
+@@ -98,6 +105,7 @@
+ 		virtual size_t GetBlockSize () const { return 128; }
+ 		virtual size_t GetDigestSize () const { return 512 / 8; }
+ 		virtual wstring GetName () const { return L"SHA-512"; }
++		virtual wstring GetAltName () const { return L"SHA512"; }
+ 		virtual shared_ptr <Hash> GetNew () const { return shared_ptr <Hash> (new Sha512); }
+ 		virtual void Init ();
+ 		virtual void ProcessData (const ConstBufferPtr &data);
+@@ -120,6 +128,7 @@
+ 		virtual size_t GetBlockSize () const { return 64; }
+ 		virtual size_t GetDigestSize () const { return 512 / 8; }
+ 		virtual wstring GetName () const { return L"Whirlpool"; }
++		virtual wstring GetAltName () const { return L"Whirlpool"; }
+ 		virtual shared_ptr <Hash> GetNew () const { return shared_ptr <Hash> (new Whirlpool); }
+ 		virtual void Init ();
+ 		virtual void ProcessData (const ConstBufferPtr &data);

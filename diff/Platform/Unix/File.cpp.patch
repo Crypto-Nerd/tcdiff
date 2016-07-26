@@ -1,0 +1,39 @@
+--- ./Platform/Unix/File.cpp	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Platform/Unix/File.cpp	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ /*
+- Copyright (c) 2008-2010 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #include <errno.h>
+@@ -31,7 +35,7 @@
+ #include "Platform/File.h"
+ #include "Platform/TextReader.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ #if 0
+ #	define TC_TRACE_FILE_OPERATIONS
+@@ -39,7 +43,7 @@
+ 	static void TraceFileOperation (int fileHandle, FilePath filePath, bool write, uint64 length, int64 position = -1)
+ 	{
+ 		string path = filePath;
+-		if (path.empty() || path.find ("truecrypt_aux_mnt") != string::npos)
++		if (path.empty() || path.find ("veracrypt_aux_mnt") != string::npos)
+ 			return;
+ 
+ 		stringstream s;

@@ -1,0 +1,329 @@
+--- ./Main/Forms/VolumeCreationWizard.cpp	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Main/Forms/VolumeCreationWizard.cpp	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ /*
+- Copyright (c) 2008-2010 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #include "System.h"
+@@ -26,20 +30,23 @@
+ #include "VolumeFormatOptionsWizardPage.h"
+ #include "VolumeLocationWizardPage.h"
+ #include "VolumePasswordWizardPage.h"
++#include "VolumePimWizardPage.h"
+ #include "VolumeSizeWizardPage.h"
++#include "WaitDialog.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	VolumeCreationWizard::VolumeCreationWizard (wxWindow* parent)
+ 		: WizardFrame (parent),
+ 		CrossPlatformSupport (true),
+-		DisplayKeyInfo (true),
++		DisplayKeyInfo (false),
+ 		LargeFilesSupport (false),
+ 		QuickFormatEnabled (false),
+ 		SelectedFilesystemClusterSize (0),
+ 		SelectedFilesystemType (VolumeCreationOptions::FilesystemType::FAT),
+ 		SelectedVolumeHostType (VolumeHostType::File),
+ 		SelectedVolumeType (VolumeType::Normal),
++		Pim (0),
+ 		SectorSize (0),
+ 		VolumeSize (0)
+ 	{
+@@ -83,6 +90,7 @@
+ 				OuterVolume = false;
+ 				LargeFilesSupport = false;
+ 				QuickFormatEnabled = false;
++				Pim = 0;
+ 
+ 				SingleChoiceWizardPage <VolumeHostType::Enum> *page = new SingleChoiceWizardPage <VolumeHostType::Enum> (GetPageParent(), wxEmptyString, true);
+ 				page->SetMinSize (wxSize (Gui->GetCharWidth (this) * 58, Gui->GetCharHeight (this) * 18 + 5));
+@@ -152,7 +160,7 @@
+ 				else if (SelectedVolumeType == VolumeType::Hidden)
+ 				{
+ 					pageTitle = LangString["SIZE_HIDVOL_TITLE"];
+-					pageText = LangString["SIZE_HELP_HIDDEN_VOL"] + L"\n\n" + _("Please note that if your operating system does not allocate files from the beginning of the free space, the maximum possible hidden volume size may be much smaller than the size of the free space on the outer volume. This not a bug in TrueCrypt but a limitation of the operating system.");
++					pageText = LangString["SIZE_HELP_HIDDEN_VOL"] + L"\n\n" + _("Please note that if your operating system does not allocate files from the beginning of the free space, the maximum possible hidden volume size may be much smaller than the size of the free space on the outer volume. This not a bug in VeraCrypt but a limitation of the operating system.");
+ 					freeSpaceText = StringFormatter (_("Maximum possible hidden volume size for this volume is {0}."), Gui->SizeToString (MaxHiddenVolumeSize));
+ 				}
+ 				else
+@@ -184,6 +192,8 @@
+ 		case Step::VolumePassword:
+ 			{
+ 				VolumePasswordWizardPage *page = new VolumePasswordWizardPage (GetPageParent(), Password, Keyfiles);
++				page->EnableUsePim (); // force displaying "Use PIM"
++				page->SetPimSelected (Pim > 0);
+ 				
+ 				if (OuterVolume)
+ 					page->SetPageTitle (LangString["PASSWORD_HIDVOL_HOST_TITLE"]);
+@@ -195,6 +205,22 @@
+ 				page->SetPageText (LangString[OuterVolume ? "PASSWORD_HIDDENVOL_HOST_HELP" : "PASSWORD_HELP"]);
+ 				return page;
+ 			}
++			
++		case Step::VolumePim:
++			{
++				VolumePimWizardPage *page = new VolumePimWizardPage (GetPageParent());
++				
++				if (OuterVolume)
++					page->SetPageTitle (LangString["PIM_HIDVOL_HOST_TITLE"]);
++				else if (SelectedVolumeType == VolumeType::Hidden)
++					page->SetPageTitle (LangString["PIM_HIDVOL_TITLE"]);
++				else
++					page->SetPageTitle (LangString["PIM_TITLE"]);
++				
++				page->SetPageText (LangString["PIM_HELP"]);
++				page->SetVolumePim (Pim);
++				return page;
++			}
+ 
+ 		case Step::LargeFilesSupport:
+ 			{
+@@ -275,6 +301,7 @@
+ 				MountOptions mountOptions;
+ 				mountOptions.Keyfiles = Keyfiles;
+ 				mountOptions.Password = Password;
++				mountOptions.Pim = Pim;
+ 				mountOptions.Path = make_shared <VolumePath> (SelectedVolumePath);
+ 
+ 				try
+@@ -321,6 +348,7 @@
+ 				ClearHistory();
+ 				OuterVolume = false;
+ 				LargeFilesSupport = false;
++				Pim = 0;
+ 
+ 				InfoWizardPage *page = new InfoWizardPage (GetPageParent());
+ 				page->SetPageTitle (LangString["HIDVOL_PRE_CIPHER_TITLE"]);
+@@ -350,6 +378,12 @@
+ 			RandomNumberGenerator::AddToPool (ConstBufferPtr (reinterpret_cast <byte *> (&coord), sizeof (coord)));
+ 			coord = event.GetY();
+ 			RandomNumberGenerator::AddToPool (ConstBufferPtr (reinterpret_cast <byte *> (&coord), sizeof (coord)));
++			
++			VolumeCreationProgressWizardPage *page = dynamic_cast <VolumeCreationProgressWizardPage *> (GetCurrentPage());
++			if (page)
++			{
++				page->IncrementEntropyProgress ();
++			}
+ 		}
+ 	}
+ 	
+@@ -417,11 +451,18 @@
+ 
+ 				switch (SelectedFilesystemType)
+ 				{
++#if defined (TC_LINUX)
+ 				case VolumeCreationOptions::FilesystemType::Ext2:		fsFormatter = "mkfs.ext2"; break;
+ 				case VolumeCreationOptions::FilesystemType::Ext3:		fsFormatter = "mkfs.ext3"; break;
+ 				case VolumeCreationOptions::FilesystemType::Ext4:		fsFormatter = "mkfs.ext4"; break;
++				case VolumeCreationOptions::FilesystemType::NTFS:		fsFormatter = "mkfs.ntfs"; break;
++				case VolumeCreationOptions::FilesystemType::exFAT:		fsFormatter = "mkfs.exfat"; break;
++#elif defined (TC_MACOSX)
+ 				case VolumeCreationOptions::FilesystemType::MacOsExt:	fsFormatter = "newfs_hfs"; break;
++				case VolumeCreationOptions::FilesystemType::exFAT:		fsFormatter = "newfs_exfat"; break;
++#elif defined (TC_FREEBSD) || defined (TC_SOLARIS)
+ 				case VolumeCreationOptions::FilesystemType::UFS:		fsFormatter = "newfs" ; break;
++#endif
+ 				default: break;
+ 				}
+ 
+@@ -434,7 +475,10 @@
+ 					mountOptions.NoFilesystem = true;
+ 					mountOptions.Protection = VolumeProtection::None;
+ 					mountOptions.Password = Password;
++					mountOptions.Pim = Pim;
+ 					mountOptions.Keyfiles = Keyfiles;
++					mountOptions.Kdf = Kdf;
++					mountOptions.TrueCryptMode = false;
+ 
+ 					shared_ptr <VolumeInfo> volume = Core->MountVolume (mountOptions);
+ 					finally_do_arg (shared_ptr <VolumeInfo>, volume, { Core->DismountVolume (finally_arg, true); });
+@@ -475,6 +519,10 @@
+ 
+ 					if (SelectedFilesystemType == VolumeCreationOptions::FilesystemType::MacOsExt && VolumeSize >= 10 * BYTES_PER_MB)
+ 						args.push_back ("-J");
++					
++					// Perform a quick NTFS formatting
++					if (SelectedFilesystemType == VolumeCreationOptions::FilesystemType::NTFS)
++						args.push_back ("-f");
+ 
+ 					args.push_back (string (virtualDevice));
+ 
+@@ -579,7 +627,7 @@
+ 								{
+ 									if (partition.MountPoint == "/")
+ 									{
+-										Gui->ShowError (_("Error: You are trying to encrypt a system drive.\n\nTrueCrypt can encrypt a system drive only under Windows."));
++										Gui->ShowError (_("Error: You are trying to encrypt a system drive.\n\nVeraCrypt can encrypt a system drive only under Windows."));
+ 										return GetCurrentStep();
+ 									}
+ 								}
+@@ -614,7 +662,7 @@
+ 							{
+ 								if (mountPoint == "/")
+ 								{
+-									Gui->ShowError (_("Error: You are trying to encrypt a system partition.\n\nTrueCrypt can encrypt system partitions only under Windows."));
++									Gui->ShowError (_("Error: You are trying to encrypt a system partition.\n\nVeraCrypt can encrypt system partitions only under Windows."));
+ 									return GetCurrentStep();
+ 								}
+ 
+@@ -697,27 +745,88 @@
+ 		case Step::VolumePassword:
+ 			{
+ 				VolumePasswordWizardPage *page = dynamic_cast <VolumePasswordWizardPage *> (GetCurrentPage());
+-				Password = page->GetPassword();
++				try
++				{
++					Password = page->GetPassword();
++				}
++				catch (PasswordException& e)
++				{
++					Gui->ShowWarning (e);
++					return GetCurrentStep();
++				}
++				
++				Kdf = page->GetPkcs5Kdf();
+ 				Keyfiles = page->GetKeyfiles();
+ 
+ 				if (forward && Password && !Password->IsEmpty())
+ 				{
+-					try
++					if (Password->Size() < VolumePassword::WarningSizeThreshold)
+ 					{
+-						Password->CheckPortability();
++						if (!Gui->AskYesNo (LangString["PASSWORD_LENGTH_WARNING"], false, true))
++						{
++							return GetCurrentStep();
++						}
+ 					}
+-					catch (UnportablePassword &e)
++				}
++				
++				if (page->IsPimSelected ())
++					return Step::VolumePim;
++				else
++				{
++					// Clear PIM
++					Pim = 0;
++
++					// Skip PIM 
++					if (forward && OuterVolume)
+ 					{
+-						Gui->ShowError (e);
+-						return GetCurrentStep();
++						// Use FAT to prevent problems with free space
++						QuickFormatEnabled = false;
++						SelectedFilesystemType = VolumeCreationOptions::FilesystemType::FAT;
++						return Step::CreationProgress;
+ 					}
+ 
+-					if (Password->Size() < VolumePassword::WarningSizeThreshold
+-						&& !Gui->AskYesNo (LangString["PASSWORD_LENGTH_WARNING"], false, true))
++					if (VolumeSize > 4 * BYTES_PER_GB)
+ 					{
++						if (VolumeSize <= TC_MAX_FAT_SECTOR_COUNT * SectorSize)
++							return Step::LargeFilesSupport;
++						else
++							SelectedFilesystemType = VolumeCreationOptions::FilesystemType::GetPlatformNative();
++					}
++
++					return Step::FormatOptions;
++				}
++			}
++
++		case Step::VolumePim:
++			{
++				VolumePimWizardPage *page = dynamic_cast <VolumePimWizardPage *> (GetCurrentPage());
++				Pim = page->GetVolumePim();
++
++				if (forward && Password && !Password->IsEmpty())
++				{
++					if (-1 == Pim)
++					{
++						// PIM invalid: don't go anywhere
+ 						return GetCurrentStep();
+ 					}
++
++					if (Password->Size() < VolumePassword::WarningSizeThreshold)
++					{
++						if (Pim > 0 && Pim < 485)
++						{
++							Gui->ShowError ("PIM_REQUIRE_LONG_PASSWORD");
++							return GetCurrentStep();							
++						}
++					}
++					else if (Pim > 0 && Pim < 485)
++					{
++						if (!Gui->AskYesNo (LangString["PIM_SMALL_WARNING"], false, true))
++						{
++							return GetCurrentStep();
++						}
++					}
+ 				}
++				
+ 
+ 				if (forward && OuterVolume)
+ 				{
+@@ -823,7 +932,6 @@
+ 						if (SelectedVolumePath.IsDevice())
+ 						{
+ 							wxString confirmMsg = LangString["OVERWRITEPROMPT_DEVICE"];
+-							confirmMsg.Replace (L"%hs", L"%s");
+ 
+ 							if (!Gui->AskYesNo (wxString::Format (confirmMsg, wxString (_("DEVICE")).c_str(), wstring (SelectedVolumePath).c_str(), L""), false, true))
+ 								return GetCurrentStep();
+@@ -831,9 +939,8 @@
+ 						else if (FilesystemPath (wstring (SelectedVolumePath)).IsFile())
+ 						{
+ 							wxString confirmMsg = LangString["OVERWRITEPROMPT"];
+-							confirmMsg.Replace (L"%hs", L"%s");
+ 
+-							if (!Gui->AskYesNo (wxString::Format (confirmMsg, wstring (SelectedVolumePath).c_str(), false, true)))
++							if (!Gui->AskYesNo (wxString::Format (confirmMsg, wstring (SelectedVolumePath).c_str()), false, true))
+ 								return GetCurrentStep();
+ 						}
+ 					}
+@@ -855,15 +962,17 @@
+ 						options->SectorSize = SectorSize;
+ 						options->EA = SelectedEncryptionAlgorithm;
+ 						options->Password = Password;
++						options->Pim = Pim;
+ 						options->Keyfiles = Keyfiles;
+ 						options->Path = SelectedVolumePath;
+ 						options->Quick = QuickFormatEnabled;
+ 						options->Size = VolumeSize;
+ 						options->Type = OuterVolume ? VolumeType::Normal : SelectedVolumeType;
+-						options->VolumeHeaderKdf = Pkcs5Kdf::GetAlgorithm (*SelectedHash);
++						options->VolumeHeaderKdf = Pkcs5Kdf::GetAlgorithm (*SelectedHash, false);
+ 
+ 						Creator.reset (new VolumeCreator);
+-						Creator->CreateVolume (options);
++						VolumeCreatorThreadRoutine routine(options, Creator);
++						Gui->ExecuteWaitThreadRoutine (this, &routine);
+ 
+ 						page->SetKeyInfo (Creator->GetKeyInfo());
+ 
+@@ -936,7 +1045,7 @@
+ 				});
+ #endif
+ 
+-				shared_ptr <Volume> outerVolume = Core->OpenVolume (make_shared <VolumePath> (SelectedVolumePath), true, Password, Keyfiles, VolumeProtection::ReadOnly);
++				shared_ptr <Volume> outerVolume = Core->OpenVolume (make_shared <VolumePath> (SelectedVolumePath), true, Password, Pim, Kdf, false, Keyfiles, VolumeProtection::ReadOnly);
+ 				MaxHiddenVolumeSize = Core->GetMaxHiddenVolumeSize (outerVolume);
+ 
+ 				// Add a reserve (in case the user mounts the outer volume and creates new files

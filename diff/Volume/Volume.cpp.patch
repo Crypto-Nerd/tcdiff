@@ -1,0 +1,183 @@
+--- ./Volume/Volume.cpp	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Volume/Volume.cpp	2016-02-14 12:11:21.000000000 +0300
+@@ -1,22 +1,25 @@
+ /*
+- Copyright (c) 2008-2010 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #ifndef TC_WINDOWS
+ #include <errno.h>
+ #endif
+-#include "EncryptionModeLRW.h"
+ #include "EncryptionModeXTS.h"
+ #include "Volume.h"
+ #include "VolumeHeader.h"
+ #include "VolumeLayout.h"
+ #include "Common/Crypto.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	Volume::Volume ()
+ 		: HiddenVolumeProtectionTriggered (false),
+@@ -24,7 +27,9 @@
+ 		VolumeDataSize (0),
+ 		TopWriteOffset (0),
+ 		TotalDataRead (0),
+-		TotalDataWritten (0)
++		TotalDataWritten (0),
++		TrueCryptMode (false),
++		Pim (0)
+ 	{
+ 	}
+ 
+@@ -63,7 +68,7 @@
+ 		return EA->GetMode();
+ 	}
+ 
+-	void Volume::Open (const VolumePath &volumePath, bool preserveTimestamps, shared_ptr <VolumePassword> password, shared_ptr <KeyfileList> keyfiles, VolumeProtection::Enum protection, shared_ptr <VolumePassword> protectionPassword, shared_ptr <KeyfileList> protectionKeyfiles, bool sharedAccessAllowed, VolumeType::Enum volumeType, bool useBackupHeaders, bool partitionInSystemEncryptionScope)
++	void Volume::Open (const VolumePath &volumePath, bool preserveTimestamps, shared_ptr <VolumePassword> password, int pim, shared_ptr <Pkcs5Kdf> kdf, bool truecryptMode, shared_ptr <KeyfileList> keyfiles, VolumeProtection::Enum protection, shared_ptr <VolumePassword> protectionPassword, int protectionPim, shared_ptr <Pkcs5Kdf> protectionKdf, shared_ptr <KeyfileList> protectionKeyfiles, bool sharedAccessAllowed, VolumeType::Enum volumeType, bool useBackupHeaders, bool partitionInSystemEncryptionScope)
+ 	{
+ 		make_shared_auto (File, file);
+ 
+@@ -94,14 +99,18 @@
+ 				throw;
+ 		}
+ 
+-		return Open (file, password, keyfiles, protection, protectionPassword, protectionKeyfiles, volumeType, useBackupHeaders, partitionInSystemEncryptionScope);
++		return Open (file, password, pim, kdf, truecryptMode, keyfiles, protection, protectionPassword, protectionPim, protectionKdf,protectionKeyfiles, volumeType, useBackupHeaders, partitionInSystemEncryptionScope);
+ 	}
+ 
+-	void Volume::Open (shared_ptr <File> volumeFile, shared_ptr <VolumePassword> password, shared_ptr <KeyfileList> keyfiles, VolumeProtection::Enum protection, shared_ptr <VolumePassword> protectionPassword, shared_ptr <KeyfileList> protectionKeyfiles, VolumeType::Enum volumeType, bool useBackupHeaders, bool partitionInSystemEncryptionScope)
++	void Volume::Open (shared_ptr <File> volumeFile, shared_ptr <VolumePassword> password, int pim, shared_ptr <Pkcs5Kdf> kdf, bool truecryptMode, shared_ptr <KeyfileList> keyfiles, VolumeProtection::Enum protection, shared_ptr <VolumePassword> protectionPassword, int protectionPim, shared_ptr <Pkcs5Kdf> protectionKdf,shared_ptr <KeyfileList> protectionKeyfiles, VolumeType::Enum volumeType, bool useBackupHeaders, bool partitionInSystemEncryptionScope)
+ 	{
+ 		if (!volumeFile)
+ 			throw ParameterIncorrect (SRC_POS);
+ 
++		// TrueCrypt doesn't support SHA-256
++		if (kdf && truecryptMode && (kdf->GetName() == L"HMAC-SHA-256"))
++			throw UnsupportedAlgoInTrueCryptMode (SRC_POS);	
++
+ 		Protection = protection;
+ 		VolumeFile = volumeFile;
+ 		SystemEncryption = partitionInSystemEncryptionScope;
+@@ -113,11 +122,6 @@
+ 
+ 			bool skipLayoutV1Normal = false;
+ 
+-			bool deviceHosted = GetPath().IsDevice();
+-			size_t hostDeviceSectorSize = 0;
+-			if (deviceHosted)
+-				hostDeviceSectorSize = volumeFile->GetDeviceSectorSize();
+-
+ 			// Test volume layouts
+ 			foreach (shared_ptr <VolumeLayout> layout, VolumeLayout::GetAvailableLayouts (volumeType))
+ 			{
+@@ -130,13 +134,6 @@
+ 				if (useBackupHeaders && !layout->HasBackupHeader())
+ 					continue;
+ 
+-				if (typeid (*layout) == typeid (VolumeLayoutV1Hidden)
+-					&& deviceHosted
+-					&& hostDeviceSectorSize != TC_SECTOR_SIZE_LEGACY)
+-				{
+-					continue;
+-				}
+-
+ 				SecureBuffer headerBuffer (layout->GetHeaderSize());
+ 
+ 				if (layout->HasDriveHeader())
+@@ -190,11 +187,11 @@
+ 
+ 				shared_ptr <VolumeHeader> header = layout->GetHeader();
+ 
+-				if (header->Decrypt (headerBuffer, *passwordKey, layout->GetSupportedKeyDerivationFunctions(), layoutEncryptionAlgorithms, layoutEncryptionModes))
++				if (header->Decrypt (headerBuffer, *passwordKey, pim, kdf, truecryptMode, layout->GetSupportedKeyDerivationFunctions(truecryptMode), layoutEncryptionAlgorithms, layoutEncryptionModes))
+ 				{
+ 					// Header decrypted
+ 
+-					if (typeid (*layout) == typeid (VolumeLayoutV2Normal) && header->GetRequiredMinProgramVersion() < 0x600)
++					if (!truecryptMode && typeid (*layout) == typeid (VolumeLayoutV2Normal) && header->GetRequiredMinProgramVersion() < 0x10b)
+ 					{
+ 						// VolumeLayoutV1Normal has been opened as VolumeLayoutV2Normal
+ 						layout.reset (new VolumeLayoutV1Normal);
+@@ -202,6 +199,8 @@
+ 						layout->SetHeader (header);
+ 					}
+ 
++					TrueCryptMode = truecryptMode;
++					Pim = pim;
+ 					Type = layout->GetType();
+ 					SectorSize = header->GetSectorSize();
+ 
+@@ -226,10 +225,6 @@
+ 
+ 						mode.SetSectorOffset (partitionStartOffset / ENCRYPTION_DATA_UNIT_SIZE);
+ 					}
+-					else if (typeid (mode) == typeid (EncryptionModeLRW))
+-					{
+-						mode.SetSectorOffset (VolumeDataOffset / SectorSize);
+-					}
+ 
+ 					// Volume protection
+ 					if (Protection == VolumeProtection::HiddenVolumeReadOnly)
+@@ -243,9 +238,9 @@
+ 								Volume protectedVolume;
+ 
+ 								protectedVolume.Open (VolumeFile,
+-									protectionPassword, protectionKeyfiles,
++									protectionPassword, protectionPim, protectionKdf, truecryptMode, protectionKeyfiles,
+ 									VolumeProtection::ReadOnly,
+-									shared_ptr <VolumePassword> (), shared_ptr <KeyfileList> (),
++									shared_ptr <VolumePassword> (), 0, shared_ptr <Pkcs5Kdf> (),shared_ptr <KeyfileList> (),
+ 									VolumeType::Hidden,
+ 									useBackupHeaders);
+ 
+@@ -254,9 +249,6 @@
+ 
+ 								ProtectedRangeStart = protectedVolume.VolumeDataOffset;
+ 								ProtectedRangeEnd = protectedVolume.VolumeDataOffset + protectedVolume.VolumeDataSize;
+-
+-								if (typeid (*protectedVolume.Layout) == typeid (VolumeLayoutV1Hidden))
+-									ProtectedRangeEnd += protectedVolume.Layout->GetHeaderSize();
+ 							}
+ 							catch (PasswordException&)
+ 							{
+@@ -275,7 +267,7 @@
+ 
+ 			if (!partitionInSystemEncryptionScope && GetPath().IsDevice())
+ 			{
+-				// Check if the device contains TrueCrypt Boot Loader
++				// Check if the device contains VeraCrypt Boot Loader
+ 				try
+ 				{
+ 					File driveDevice;
+@@ -284,11 +276,12 @@
+ 					Buffer mbr (VolumeFile->GetDeviceSectorSize());
+ 					driveDevice.ReadAt (mbr, 0);
+ 
+-					// Search for the string "TrueCrypt"
+-					size_t nameLen = strlen (TC_APP_NAME);
++					// Search for the string "VeraCrypt" or "TrueCrypt"
++					const char* bootSignature = truecryptMode? "TrueCrypt" : TC_APP_NAME;
++					size_t nameLen = strlen (bootSignature);
+ 					for (size_t i = 0; i < mbr.Size() - nameLen; ++i)
+ 					{
+-						if (memcmp (mbr.Ptr() + i, TC_APP_NAME, nameLen) == 0)
++						if (memcmp (mbr.Ptr() + i, bootSignature, nameLen) == 0)
+ 							throw PasswordOrMountOptionsIncorrect (SRC_POS);
+ 					}
+ 				}

@@ -1,0 +1,48 @@
+--- ./Main/Xml.cpp	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Main/Xml.cpp	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ /*
+- Copyright (c) 2008 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #include "System.h"
+@@ -11,7 +15,7 @@
+ #include "Platform/FileStream.h"
+ #include "Xml.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	XmlParser::XmlParser (const FilePath &fileName)
+ 	{
+@@ -93,7 +97,7 @@
+ 		TextOutStream.reset (new wxTextOutputStream (*MemOutStream));
+ 		OutFile.Open (fileName, File::CreateWrite);
+ 
+-		*TextOutStream << L"<?xml version=\"1.0\" encoding=\"utf-8\"?>" << endl << L"<TrueCrypt>" << endl;
++		*TextOutStream << L"<?xml version=\"1.0\" encoding=\"utf-8\"?>" << endl << L"<VeraCrypt>" << endl;
+ 		CurrentIndentLevel = 0;
+ 	}
+ 
+@@ -101,7 +105,7 @@
+ 	{
+ 		if (MemOutStream.get())
+ 		{
+-			*TextOutStream << L"</TrueCrypt>" << endl;
++			*TextOutStream << L"</VeraCrypt>" << endl;
+ 
+ 			wxStreamBuffer *buf = MemOutStream->GetOutputStreamBuffer();
+ 			OutFile.Write (ConstBufferPtr (reinterpret_cast <byte *> (buf->GetBufferStart()), buf->GetBufferSize()));

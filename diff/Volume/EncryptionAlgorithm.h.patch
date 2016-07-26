@@ -1,0 +1,55 @@
+--- ./Volume/EncryptionAlgorithm.h	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Volume/EncryptionAlgorithm.h	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ /*
+- Copyright (c) 2008 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #ifndef TC_HEADER_Encryption_EncryptionAlgorithm
+@@ -13,7 +17,7 @@
+ #include "Cipher.h"
+ #include "EncryptionMode.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	class EncryptionAlgorithm;
+ 	typedef list < shared_ptr <EncryptionAlgorithm> > EncryptionAlgorithmList;
+@@ -37,7 +41,7 @@
+ 		static size_t GetLargestKeySize (const EncryptionAlgorithmList &algorithms);
+ 		virtual size_t GetKeySize () const;
+ 		virtual shared_ptr <EncryptionMode> GetMode () const;
+-		virtual wstring GetName () const;
++		virtual wstring GetName (bool forGuiDisplay = false) const;
+ 		bool IsDeprecated () const { return Deprecated; }
+ 		virtual bool IsModeSupported (const EncryptionMode &mode) const;
+ 		virtual bool IsModeSupported (const shared_ptr <EncryptionMode> mode) const;
+@@ -74,15 +78,10 @@
+ 	}
+ 
+ 	TC_ENCRYPTION_ALGORITHM (AES);
+-	TC_ENCRYPTION_ALGORITHM (AESBlowfish);
+-	TC_ENCRYPTION_ALGORITHM (AESBlowfishSerpent);
+ 	TC_ENCRYPTION_ALGORITHM (AESTwofish);
+ 	TC_ENCRYPTION_ALGORITHM (AESTwofishSerpent);
+-	TC_ENCRYPTION_ALGORITHM (Blowfish);
+-	TC_ENCRYPTION_ALGORITHM (Cast5);
+ 	TC_ENCRYPTION_ALGORITHM (Serpent);
+ 	TC_ENCRYPTION_ALGORITHM (SerpentAES);
+-	TC_ENCRYPTION_ALGORITHM (TripleDES);
+ 	TC_ENCRYPTION_ALGORITHM (Twofish);
+ 	TC_ENCRYPTION_ALGORITHM (TwofishSerpent);
+ 	TC_ENCRYPTION_ALGORITHM (SerpentTwofishAES);

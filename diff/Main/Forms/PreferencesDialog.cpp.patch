@@ -1,0 +1,114 @@
+--- ./Main/Forms/PreferencesDialog.cpp	2012-02-07 14:36:48.000000000 +0400
++++ ../veracrypt_1.17_Source/src/Main/Forms/PreferencesDialog.cpp	2016-02-14 12:11:21.000000000 +0300
+@@ -1,9 +1,13 @@
+ /*
+- Copyright (c) 2008-2009 TrueCrypt Developers Association. All rights reserved.
+-
+- Governed by the TrueCrypt License 3.0 the full text of which is contained in
+- the file License.txt included in TrueCrypt binary and source code distribution
+- packages.
++ Derived from source code of TrueCrypt 7.1a, which is
++ Copyright (c) 2008-2012 TrueCrypt Developers Association and which is governed
++ by the TrueCrypt License 3.0.
++
++ Modifications and additions to the original source code (contained in this file) 
++ and all other portions of this file are Copyright (c) 2013-2016 IDRIX
++ and are governed by the Apache License 2.0 the full text of which is
++ contained in the file License.txt included in VeraCrypt binary and source
++ code distribution packages.
+ */
+ 
+ #include "System.h"
+@@ -18,7 +22,7 @@
+ #include "Volume/Cipher.h"
+ #include "PreferencesDialog.h"
+ 
+-namespace TrueCrypt
++namespace VeraCrypt
+ {
+ 	PreferencesDialog::PreferencesDialog (wxWindow* parent)
+ 		: PreferencesDialogBase (parent),
+@@ -48,6 +52,23 @@
+ 		MountRemovableCheckBox->SetValidator (wxGenericValidator (&Preferences.DefaultMountOptions.Removable));
+ 
+ 		FilesystemOptionsTextCtrl->SetValue (Preferences.DefaultMountOptions.FilesystemOptions);
++		
++		TrueCryptModeCheckBox->SetValidator (wxGenericValidator (&Preferences.DefaultMountOptions.TrueCryptMode));
++		
++		int index, prfInitialIndex = 0;
++		Pkcs5PrfChoice->Append (LangString["AUTODETECTION"]);		
++
++		foreach_ref (const Pkcs5Kdf &kdf, Pkcs5Kdf::GetAvailableAlgorithms(false))
++		{
++			index = Pkcs5PrfChoice->Append (kdf.GetName());
++			if (Preferences.DefaultMountOptions.Kdf 
++				&& (Preferences.DefaultMountOptions.Kdf->GetName() == kdf.GetName())
++				)
++			{
++				prfInitialIndex = index;
++			}
++		}
++		Pkcs5PrfChoice->Select (prfInitialIndex);
+ 
+ 		// Keyfiles
+ 		TC_CHECK_BOX_VALIDATOR (UseKeyfiles);
+@@ -114,7 +135,7 @@
+ 
+ #ifdef TC_MACOSX
+ 		DismountOnScreenSaverCheckBox->Show (false);
+-		DismountOnLogOffCheckBox->SetLabel (_("TrueCrypt quits"));
++		DismountOnLogOffCheckBox->SetLabel (_("VeraCrypt quits"));
+ 		OpenExplorerWindowAfterMountCheckBox->SetLabel (_("Open Finder window for successfully mounted volume"));
+ 
+ 		MountRemovableCheckBox->Show (false);
+@@ -154,7 +175,7 @@
+ 		Gui->SetListCtrlColumnWidths (HotkeyListCtrl, colPermilles);
+ 
+ 		RestoreValidatorBell = !wxTextValidator::IsSilent();
+-		wxTextValidator::SetBellOnError (true);
++		wxTextValidator::SuppressBellOnError (true);
+ 		HotkeyTextCtrl->SetValidator (wxTextValidator (wxFILTER_INCLUDE_CHAR_LIST));
+ 
+ 		UpdateHotkeyButtons();
+@@ -203,8 +224,10 @@
+ 
+ 	PreferencesDialog::~PreferencesDialog ()
+ 	{
++#ifdef TC_WINDOWS
+ 		if (RestoreValidatorBell)
+-			wxTextValidator::SetBellOnError (false);
++			wxTextValidator::SuppressBellOnError (false);
++#endif
+ 	}
+ 
+ 	void PreferencesDialog::SelectPage (wxPanel *page)
+@@ -340,12 +363,29 @@
+ #endif
+ 		if (!Validate())
+ 			return;
++			
++		shared_ptr <Pkcs5Kdf> selectedKdf;
++		if (Pkcs5PrfChoice->GetSelection () != 0)
++		{
++			try
++			{
++				selectedKdf = Pkcs5Kdf::GetAlgorithm (wstring (Pkcs5PrfChoice->GetStringSelection ()), TrueCryptModeCheckBox->IsChecked ());
++			}
++			catch (ParameterIncorrect&)
++			{
++				Gui->ShowWarning ("ALGO_NOT_SUPPORTED_FOR_TRUECRYPT_MODE");
++				return;
++			}
++		}
+ 
+ 		TransferDataFromWindow();
+ 
+ 		Preferences.DefaultMountOptions.Protection = MountReadOnlyCheckBox->IsChecked() ? VolumeProtection::ReadOnly : VolumeProtection::None;
+ 		Preferences.DefaultMountOptions.FilesystemOptions = FilesystemOptionsTextCtrl->GetValue();
+ 		Preferences.DefaultKeyfiles = *DefaultKeyfilesPanel->GetKeyfiles();
++		
++		Preferences.DefaultMountOptions.Kdf = selectedKdf;
++		Preferences.DefaultMountOptions.ProtectionKdf = selectedKdf;
+ 
+ 		bool securityTokenModuleChanged = (Preferences.SecurityTokenModule != wstring (Pkcs11ModulePathTextCtrl->GetValue()));
+ 		Preferences.SecurityTokenModule = wstring (Pkcs11ModulePathTextCtrl->GetValue());
